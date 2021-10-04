@@ -338,5 +338,59 @@ tests:
 All *Test Suites* run in parallel with each other. The tests within each suite will run sequentially to force a linear dependency graph on storing and fetching variables in the data store.
 For most optimal performance, you can organize your tests in one of the following ways:
 1. ${test-root}/${api}.yaml - Good for short API calls that all flow into each other.
-2. ${test-root}/${api}/{action}.yaml - Good for separating tests with dependent calls from other tests with no dependencies
+2. ${test-root}/${api}/{action}.yaml - Good for separating tests with dependent calls from other tests with no dependencies within the same API scope
+
+## Pro-Tips:
+
+### Using Anchors
+Our input is YAML and YAML supports anchors out of the box to reduce verbosity! Since the tests within yaml file are scoped under the 'tests' key, you can create arbitrary keys for anchoring
+elsewhere in your test file.
+
+```yaml
+# foo_test.yaml
+
+# common headers to pass with every request
+Headers: &headers
+  SomeHeader: MyHeader
+
+# some common regular expression
+# ISO date field
+DateField: &date 
+  type: string
+  matches: '^(\d{4})-0?(\d+)-0?(\d+)[T ]0?(\d+):0?(\d+):0?(\d+)$' 
+
+AnyString: &any-string
+  type: string
+  matches: $any
+
+# define some constant values here too
+Response200: &succes 200
+
+Input: &default-input
+  apiToken: @{API_KEY}
+
+# tests is the only reserved key in our file
+tests:  
+  - name: List Foos
+    description: Should list all Foos with a Name ending with 'Bar'
+    method: GET
+    route: 'http://localhost/foo?search=Bar'
+    headers:
+      <<: *headers
+      NewHeader: something not common
+    input:
+      <<: *default-input
+    response:
+      code: *succes
+      # expecting a payload of {Foo: [{Date: "FooBar"}, "any string"]}
+      payload:
+        Foo:
+          type: array
+          length: 1
+          items:
+            - type: object
+              properties:
+                Date: *date
+            - *any-string
+```
 
