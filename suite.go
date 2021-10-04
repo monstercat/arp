@@ -164,7 +164,7 @@ func (t *TestCase) replaceDataStoreVar(input string) (string, error) {
 	}
 
 	for i, v := range toResolve {
-		varKey := strings.ReplaceAll(strings.ReplaceAll(v.VarName, "@{", ""), "}", "")
+		varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
 		resolvedVar, err := t.resolveVariable(varKey)
 		if err != nil {
 			return "", err

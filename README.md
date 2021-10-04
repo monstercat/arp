@@ -15,6 +15,23 @@ defined in YAML files, no coding is required.
 * **Test:** An individual test case that provides an input and validates a response
 * **Test Suite:** A file containing multiple tests
 
+## Usage
+```text
+Usage of ./checker:
+  -colors
+        Whether to print test report with colors (default true)
+  -fixtures string
+        Path to yaml file with data to include into the test scope via test variables. (default "./fixtures.yaml")
+  -host string
+        Default host url to use with tests. Populates the @{host} variable. (default "http://localhost")
+  -short
+        Whether or not to print out a short or extended report (default true)
+  -test-root string
+        File path to scan and execute test files from (default ".")
+  -threads int
+        Number of test files to execute at a time. (default 16)
+```
+
 
 ## Sample Test
 Here is a simple test case that can be executed

@@ -20,11 +20,16 @@ type ProgramArgs struct {
 
 func (p *ProgramArgs) Init() {
 	p.DefaultHost = flag.String("host", "http://localhost", "Default host url to use with tests. Populates the @{host} variable.")
-	p.Fixtures = flag.String("fixtures", "", "Path to file with data to include into the test scope via test variables.")
+	p.Fixtures = flag.String("fixtures", "./fixtures.yaml", "Path to yaml file with data to include into the test scope via test variables.")
 	p.TestRoot = flag.String("test-root", ".", "File path to scan and execute test files from")
 	p.Threads = flag.Int("threads", 16, "Number of test files to execute at a time.")
 	p.Short = flag.Bool("short", true, "Whether or not to print out a short or extended report")
 	p.Colorize = flag.Bool("colors", true, "Whether to print test report with colors")
+
+	if len(os.Args) <= 1 {
+		flag.Usage()
+		os.Exit(0)
+	}
 	flag.Parse()
 
 	if *p.Threads < 0 {
