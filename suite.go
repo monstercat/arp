@@ -231,6 +231,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 }
 
 func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
+	t.ResponseMatcher.DS = t.GlobalDataStore
 	if name, ok := json["name"]; ok {
 		t.Name = name.(string)
 	}
@@ -277,14 +278,8 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 	}
 
 	if payload, ok := responseJson["payload"]; ok {
-		t.ResponseMatcher.DS = DataStore{}
 
-		resolvedPayload, err := t.GlobalDataStore.resolveDataStoreVarRecursive(payload)
-		if err != nil {
-			return fmt.Errorf("Failed to resolve variables in response validator: %v", err)
-		}
-
-		return t.ResponseMatcher.loadObjectFields(resolvedPayload.(map[interface{}]interface{}), FieldMatcherPath{})
+		return t.ResponseMatcher.loadObjectFields(payload.(map[interface{}]interface{}), FieldMatcherPath{})
 	}
 
 	return nil
@@ -341,8 +336,8 @@ func (t *TestCase) Validate(statusCode int, response map[string]interface{}) (bo
 	}
 
 	if status && statusCodeResult.Status {
-		for k := range t.ResponseMatcher.DS {
-			(*t.GlobalDataStore)[k] = t.ResponseMatcher.DS[k]
+		for k := range *t.ResponseMatcher.DS {
+			(*t.GlobalDataStore)[k] = (*t.ResponseMatcher.DS)[k]
 		}
 	}
 
@@ -450,8 +445,10 @@ func (t *TestSuite) LoadTests(testFile string) (bool, error) {
 
 	if tests, ok := testList.([]interface{}); ok {
 		for _, test := range tests {
-			tCase := TestCase{}
-			tCase.GlobalDataStore = &t.GlobalDataStore
+			tCase := TestCase{
+				GlobalDataStore: &t.GlobalDataStore,
+			}
+
 			err = tCase.LoadConfig(test.(map[interface{}]interface{}))
 			if err != nil {
 				return false, fmt.Errorf("Failed to load test file: %v - %v", testFile, err)

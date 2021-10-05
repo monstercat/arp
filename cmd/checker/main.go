@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 
 	. "github.com/monstercat/integration-checker"
 )
@@ -168,6 +169,12 @@ func printReport(c Colorizer, shortReport bool, testRoot string, passed bool, re
 				fmt.Printf("%v%v\n", indentStr(3), resolvedRoute)
 			}
 
+			sort.Slice(test.Fields, func(i, j int) bool {
+				a := test.Fields[i].ObjectKeyPath
+				b := test.Fields[j].ObjectKeyPath
+
+				return a[0] != b[0] || a < b
+			})
 			for _, f := range test.Fields {
 				fieldStr := f.ObjectKeyPath
 				errStr := f.Error

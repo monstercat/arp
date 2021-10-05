@@ -31,7 +31,7 @@ type DataStore map[string]interface{}
 type FieldMatcher interface {
 	GetPriority() int
 	Parse(node map[interface{}]interface{}) error
-	Match(field interface{}) (bool, error, DataStore)
+	Match(field interface{}, datastore *DataStore) (bool, error, DataStore)
 	Error() string
 	SetError(error string)
 }
@@ -121,7 +121,7 @@ type FieldMatcherResult struct {
 }
 
 type ResponseMatcher struct {
-	DS     DataStore
+	DS     *DataStore
 	Config []*FieldMatcherConfig
 }
 
@@ -210,7 +210,7 @@ func (m *IntegerMatcher) Parse(node map[interface{}]interface{}) error {
 	return err
 }
 
-func (m *IntegerMatcher) Match(responseValue interface{}) (bool, error, DataStore) {
+func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
@@ -218,13 +218,13 @@ func (m *IntegerMatcher) Match(responseValue interface{}) (bool, error, DataStor
 		return status, nil, store
 	}
 
+	var status bool
+	var err error
+
 	typedResponseValue, ok := responseValue.(float64)
 	if !ok {
 		return false, nil, nil
 	}
-
-	var status bool
-	var err error
 
 	if m.Value != nil {
 		status = *m.Value == int64(typedResponseValue)
@@ -232,10 +232,15 @@ func (m *IntegerMatcher) Match(responseValue interface{}) (bool, error, DataStor
 			m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
 		}
 	} else if m.Pattern != nil {
-		if *m.Pattern == Any {
+		resolved, err := (*datastore).replaceDataStoreVar(*m.Pattern)
+		if err != nil {
+			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+		}
+
+		if resolved == Any {
 			status = true
 		} else {
-			status, err = matchPattern(*m.Pattern,
+			status, err = matchPattern(resolved,
 				[]byte(strconv.FormatInt(int64(typedResponseValue), 10)))
 
 			if !status {
@@ -284,7 +289,7 @@ func (m *BoolMatcher) Parse(node map[interface{}]interface{}) error {
 	return err
 }
 
-func (m *BoolMatcher) Match(responseValue interface{}) (bool, error, DataStore) {
+func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
@@ -306,14 +311,19 @@ func (m *BoolMatcher) Match(responseValue interface{}) (bool, error, DataStore) 
 			m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
 		}
 	} else if m.Pattern != nil {
-		if *m.Pattern == Any {
+		resolved, err := (*datastore).replaceDataStoreVar(*m.Pattern)
+		if err != nil {
+			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+		}
+
+		if resolved == Any {
 			status = true
 		} else {
 			var res bool
-			res, err = strconv.ParseBool(*m.Pattern)
+			res, err = strconv.ParseBool(resolved)
 			result := res == typedResponseValue
 			if !result {
-				m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
+				m.ErrorStr = fmt.Sprintf(ValueErrFmt, res, typedResponseValue)
 			}
 			status = err != nil && result
 		}
@@ -357,7 +367,7 @@ func (m *StringMatcher) Parse(node map[interface{}]interface{}) error {
 	return err
 }
 
-func (m *StringMatcher) Match(responseValue interface{}) (bool, error, DataStore) {
+func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
 		m.ErrorStr = message
@@ -373,7 +383,12 @@ func (m *StringMatcher) Match(responseValue interface{}) (bool, error, DataStore
 	var err error
 
 	if m.Value != nil {
-		switch *m.Value {
+		resolved, err := (*datastore).replaceDataStoreVar(*m.Value)
+		if err != nil {
+			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Value), store
+		}
+
+		switch resolved {
 		case Any:
 			status = true
 		case NotEmpty:
@@ -382,9 +397,9 @@ func (m *StringMatcher) Match(responseValue interface{}) (bool, error, DataStore
 				m.ErrorStr = fmt.Sprintf(NotEmptyErrFmt, typedResponseValue)
 			}
 		default:
-			status, err = matchPattern(*m.Value, []byte(typedResponseValue))
+			status, err = matchPattern(resolved, []byte(typedResponseValue))
 			if !status {
-				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, *m.Value)
+				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolved)
 			}
 		}
 	}
@@ -445,7 +460,7 @@ func (m *ArrayMatcher) Parse(node map[interface{}]interface{}) error {
 	return nil
 }
 
-func (m *ArrayMatcher) Match(responseValue interface{}) (bool, error, DataStore) {
+func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
 		m.ErrorStr = message
@@ -467,7 +482,11 @@ func (m *ArrayMatcher) Match(responseValue interface{}) (bool, error, DataStore)
 			m.ErrorStr = fmt.Sprintf(ArrayLengthErrFmt, "=", *m.Length, responseLength)
 		}
 	} else if m.LengthStr != nil {
-		s := *m.LengthStr
+		resolved, err := (*datastore).replaceDataStoreVar(*m.LengthStr)
+		if err != nil {
+			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.LengthStr), store
+		}
+		s := resolved
 
 		switch s {
 		case NotEmpty:
@@ -638,7 +657,7 @@ type DepthMatchResponse struct {
 }
 
 func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConfig, path string, key string) DepthMatchResponse {
-	status, _, _ := matcher.Matcher.Match(node)
+	status, _, _ := matcher.Matcher.Match(node, r.DS)
 	if status {
 		return DepthMatchResponse{
 			Status:         status,
@@ -782,13 +801,13 @@ func (r *ResponseMatcher) Match(response map[string]interface{}) (bool, error, [
 
 		}
 
-		status, err, ds := matcher.Matcher.Match(node)
+		status, err, ds := matcher.Matcher.Match(node, r.DS)
 		if err != nil {
 			return false, err, results
 		}
 
 		for k := range ds {
-			r.DS[k] = ds[k]
+			(*r.DS)[k] = ds[k]
 		}
 
 		if node == nil && matcher.ObjectKeyPath.IsArrayElement {
