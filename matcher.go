@@ -177,8 +177,8 @@ func getMatcherPriority(node map[interface{}]interface{}) int {
 	return 0
 }
 
-func handleExistence(node interface{}, exists bool) (bool, bool, string) {
-	if node == nil && exists {
+func handleExistence(node interface{}, exists bool, canBeNull bool) (bool, bool, string) {
+	if node == nil && exists && !canBeNull {
 		return false, false, fmt.Sprintf(RecievedNullErrFmt)
 	} else if node == nil && !exists {
 		return true, false, ""
@@ -213,7 +213,7 @@ func (m *IntegerMatcher) Parse(node map[interface{}]interface{}) error {
 func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
+	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
 		return status, nil, store
 	}
@@ -292,7 +292,7 @@ func (m *BoolMatcher) Parse(node map[interface{}]interface{}) error {
 func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
+	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
 		return status, nil, store
 	}
@@ -369,7 +369,7 @@ func (m *StringMatcher) Parse(node map[interface{}]interface{}) error {
 
 func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
-	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
+	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
 		return status, nil, store
 	}
@@ -462,16 +462,22 @@ func (m *ArrayMatcher) Parse(node map[interface{}]interface{}) error {
 
 func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
 	store := DataStore{}
-	if status, passthrough, message := handleExistence(responseValue, m.Exists); !passthrough {
+	if status, passthrough, message := handleExistence(responseValue, m.Exists, true); !passthrough {
 		m.ErrorStr = message
 		return status, nil, store
 	}
 
-	typedResponseValue, ok := responseValue.([]interface{})
-	if !ok {
-		return false, nil, nil
+	var typedResponseValue []interface{}
+	if responseValue == nil {
+		// if nil, we can still validate the length in case a non-0 value was expected
+		typedResponseValue = []interface{}{}
+	} else {
+		var ok bool
+		typedResponseValue, ok = responseValue.([]interface{})
+		if !ok {
+			return false, nil, nil
+		}
 	}
-
 	var status bool
 	var err error
 
@@ -491,29 +497,32 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 		switch s {
 		case NotEmpty:
 			status = responseLength > 0
-		}
-		// order from longest string to shortest
-		for _, op := range []string{GTE, LTE, GT, LT} {
-			if strings.HasPrefix(s, op) {
-				var length int64
-				length, err = strconv.ParseInt(strings.TrimSpace(strings.ReplaceAll(s, op, "")), 10, 32)
-				if err != nil {
-					return false, err, store
-				}
-				switch op {
-				case LT:
-					status = responseLength < length
-				case LTE:
-					status = responseLength <= length
-				case GT:
-					status = responseLength > length
-				case GTE:
-					status = responseLength >= length
-				}
+		case Any:
+			status = true
+		default:
+			// order from longest string to shortest
+			for _, op := range []string{GTE, LTE, GT, LT} {
+				if strings.HasPrefix(s, op) {
+					var length int64
+					length, err = strconv.ParseInt(strings.TrimSpace(strings.ReplaceAll(s, op, "")), 10, 32)
+					if err != nil {
+						return false, err, store
+					}
+					switch op {
+					case LT:
+						status = responseLength < length
+					case LTE:
+						status = responseLength <= length
+					case GT:
+						status = responseLength > length
+					case GTE:
+						status = responseLength >= length
+					}
 
-				if !status {
-					sign := strings.ReplaceAll(op, "$", "")
-					m.ErrorStr = fmt.Sprintf(ArrayLengthErrFmt, sign, length, responseLength)
+					if !status {
+						sign := strings.ReplaceAll(op, "$", "")
+						m.ErrorStr = fmt.Sprintf(ArrayLengthErrFmt, sign, length, responseLength)
+					}
 				}
 			}
 		}

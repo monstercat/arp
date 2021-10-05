@@ -136,7 +136,7 @@ func parseVar(input string) VarStack {
 			curStackFrame = &VarStackFrame{}
 			curStackFrame.StartPos = i
 			curStackFrame.Nested = nestLevel
-		} else if char == '}' {
+		} else if curStackFrame != nil && char == '}' {
 			curStackFrame.EndPos = i
 			curStackFrame.VarName = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
 			resultStack.Push(*curStackFrame)
