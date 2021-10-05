@@ -146,6 +146,10 @@ func printReport(c Colorizer, shortReport bool, testRoot string, passed bool, re
 		for _, test := range r.TestResults.Results {
 			details := test.TestCase
 			routeStr := c.BrightWhite(fmt.Sprintf("[%v] %v", details.Method, details.Route))
+			resolvedRoute := ""
+			if !shortReport {
+				resolvedRoute = c.BrightWhite(fmt.Sprintf("%v", test.ResolvedRoute))
+			}
 
 			if test.Passed {
 				globalPassed += 1
@@ -160,6 +164,9 @@ func printReport(c Colorizer, shortReport bool, testRoot string, passed bool, re
 
 			fmt.Printf("%v[%v]: %v - %v -> %v\n", indentStr(1), getSuccessString(c, test.Passed, statusStyle),
 				c.BrightWhite(details.Name), details.Description, routeStr)
+			if resolvedRoute != "" {
+				fmt.Printf("%v%v\n", indentStr(3), resolvedRoute)
+			}
 
 			for _, f := range test.Fields {
 				fieldStr := f.ObjectKeyPath

@@ -39,10 +39,11 @@ type TestSuite struct {
 }
 
 type TestResult struct {
-	TestCase TestCase
-	Fields   []*FieldMatcherResult
-	Passed   bool
-	Response map[string]interface{}
+	TestCase      TestCase
+	Fields        []*FieldMatcherResult
+	Passed        bool
+	Response      map[string]interface{}
+	ResolvedRoute string
 }
 
 type SuiteResult struct {
@@ -68,10 +69,10 @@ func YamlToJson(i interface{}) interface{} {
 	return i
 }
 
-func (t *TestCase) resolveVariable(variable string) (string, error) {
+func (t *DataStore) resolveVariable(variable string) (string, error) {
 	keys := strings.Split(variable, ".")
 	var node interface{}
-	node = *t.GlobalDataStore
+	node = *t
 	for _, k := range keys {
 		switch v := node.(type) {
 		case DataStore:
@@ -146,7 +147,7 @@ func parseVar(input string) VarStack {
 	return resultStack
 }
 
-func (t *TestCase) replaceDataStoreVar(input string) (string, error) {
+func (t *DataStore) replaceDataStoreVar(input string) (string, error) {
 	outputString := input
 	variables := parseVar(input)
 
@@ -186,7 +187,7 @@ func (t *TestCase) replaceDataStoreVar(input string) (string, error) {
 	return outputString, nil
 }
 
-func (t *TestCase) resolveDataStoreVarRecursive(input interface{}) (interface{}, error) {
+func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -277,14 +278,20 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 
 	if payload, ok := responseJson["payload"]; ok {
 		t.ResponseMatcher.DS = DataStore{}
-		return t.ResponseMatcher.loadObjectFields(payload.(map[interface{}]interface{}), FieldMatcherPath{})
+
+		resolvedPayload, err := t.GlobalDataStore.resolveDataStoreVarRecursive(payload)
+		if err != nil {
+			return fmt.Errorf("Failed to resolve variables in response validator: %v", err)
+		}
+
+		return t.ResponseMatcher.loadObjectFields(resolvedPayload.(map[interface{}]interface{}), FieldMatcherPath{})
 	}
 
 	return nil
 }
 
 func (t *TestCase) GetTestRoute() (string, error) {
-	resolvedRoute, err := t.replaceDataStoreVar(t.Route)
+	resolvedRoute, err := t.GlobalDataStore.replaceDataStoreVar(t.Route)
 	if err != nil {
 		return "", err
 	}
@@ -292,7 +299,7 @@ func (t *TestCase) GetTestRoute() (string, error) {
 }
 
 func (t *TestCase) GetTestInput() (io.Reader, error) {
-	node, err := t.resolveDataStoreVarRecursive(t.Input)
+	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +314,7 @@ func (t *TestCase) GetTestInput() (io.Reader, error) {
 }
 
 func (t *TestCase) GetTestHeaders() (interface{}, error) {
-	node, err := t.resolveDataStoreVarRecursive(t.Headers)
+	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -444,8 +451,8 @@ func (t *TestSuite) LoadTests(testFile string) (bool, error) {
 	if tests, ok := testList.([]interface{}); ok {
 		for _, test := range tests {
 			tCase := TestCase{}
-			err = tCase.LoadConfig(test.(map[interface{}]interface{}))
 			tCase.GlobalDataStore = &t.GlobalDataStore
+			err = tCase.LoadConfig(test.(map[interface{}]interface{}))
 			if err != nil {
 				return false, fmt.Errorf("Failed to load test file: %v - %v", testFile, err)
 			}
@@ -481,6 +488,7 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
 	if err != nil {
 		return false, fmt.Errorf("Failed to determine test route: %v", err), results
 	}
+	results.ResolvedRoute = route
 
 	input, err := test.GetTestInput()
 	if err != nil {
