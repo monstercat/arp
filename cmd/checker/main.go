@@ -175,14 +175,14 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 		printIndentedLn(1, "Passed: %v, Failed: %v, Total:%v\n", r.TestResults.Passed,
 			r.TestResults.Failed, r.TestResults.Total)
 
+		globalFailed += r.TestResults.Failed
+		globalPassed += r.TestResults.Passed
+
 		fmt.Printf("%v\n", separator(c))
 
 		for _, test := range r.TestResults.Results {
 			showErrors := false
-			if test.Passed {
-				globalPassed += 1
-			} else {
-				globalFailed += 1
+			if !test.Passed {
 				showErrors = !*args.ShortErrors
 			}
 
@@ -191,11 +191,6 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 
 			details := test.TestCase
 			routeStr := fmt.Sprintf("[%v] %v", c.BrightCyan(details.Method), c.BrightWhite(details.Route))
-			resolvedRoute := ""
-			if showExtendedReport {
-				resolvedRoute = c.BrightWhite(fmt.Sprintf("%v", test.ResolvedRoute))
-			}
-
 			statusStyle := ""
 			if test.TestCase.Skip {
 				statusStyle = "skipped"
@@ -204,10 +199,6 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 			printIndentedLn(1, "[%v]: %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
 				c.BrightWhite(details.Name), details.Description)
 			printIndentedLn(1, "%v\n", routeStr)
-			if resolvedRoute != "" {
-				printIndentedLn(3, "%v\n", resolvedRoute)
-			}
-
 			if showFieldValidations {
 				sort.Slice(test.Fields, func(i, j int) bool {
 					a := test.Fields[i].ObjectKeyPath
@@ -232,13 +223,18 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 			fmt.Printf("\n")
 
 			if showExtendedReport {
+				printIndentedLn(2, "Route: %v\n", test.ResolvedRoute)
+				printIndentedLn(2, "Status Code: %v\n", test.StatusCode)
+
 				input := YamlToJson(test.TestCase.Input)
 				inputJson, _ := json.MarshalIndent(input, indentStr(2), " ")
 				printIndentedLn(2, "Input: %v\n", string(inputJson))
 
 				data, _ := json.MarshalIndent(test.Response, indentStr(2), " ")
-				printIndentedLn(2, "Response: %v\n", string(data))
+				printIndentedLn(2, "Response: %v\n\n", string(data))
+				fmt.Printf(c.BrightWhite("---\n"))
 			}
+
 		}
 
 		if r.Error != nil {
@@ -250,7 +246,7 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 
 	fmt.Printf("%v\n", separator(c))
 	printIndentedLn(0, "[%v] %v\n", getSuccessString(c, passed, ""), c.BrightWhite(*args.TestRoot))
-	printIndentedLn(0, "%-6d:Total Tests\n%-6d:Passed\n%-6d:Failed\n", globalFailed+globalPassed, globalPassed, globalFailed)
+	printIndentedLn(0, "%-6[2]d:Total Tests\n%-6[3]d:Passed\n%-6[4]d:Failed\n", 0, globalPassed, globalFailed)
 	fmt.Printf("%v\n", separator(c))
 
 }

@@ -14,6 +14,7 @@ import (
 )
 
 type TestCase struct {
+	ExitOnRun       bool
 	Skip            bool
 	Name            string
 	Description     string
@@ -44,6 +45,7 @@ type TestResult struct {
 	Passed        bool
 	Response      map[string]interface{}
 	ResolvedRoute string
+	StatusCode    int
 }
 
 type SuiteResult struct {
@@ -258,6 +260,10 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 
 	if skip, ok := json["skip"]; ok {
 		t.Skip = skip.(bool)
+	}
+
+	if exit, ok := json["exit"]; ok {
+		t.ExitOnRun = exit.(bool)
 	}
 
 	responseConfig, ok := json["response"]
@@ -519,6 +525,8 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
 		return false, fmt.Errorf("Failed to fetch API response: %v", err), results
 	}
 
+	results.StatusCode = response.StatusCode
+
 	responseData, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return false, fmt.Errorf("Failed to fetch API response: %v", err), results
@@ -551,6 +559,9 @@ func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
 	}
 
 	for _, test := range t.Tests {
+		if test.ExitOnRun {
+			break
+		}
 		passed, err, results := t.ExecuteTest(&test)
 		if err != nil {
 			return false, err, suiteResults
