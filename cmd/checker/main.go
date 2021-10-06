@@ -28,15 +28,15 @@ func (p *ProgramArgs) Init() {
 	p.DefaultHost = flag.String("host", "http://localhost", "Default host url to use with tests. Populates the @{host} variable.")
 	p.Fixtures = flag.String("fixtures", "./fixtures.yaml", "Path to yaml file with data to include into the test scope via test variables.")
 	p.TestRoot = flag.String("test-root", ".", "File path to scan and execute test files from")
-	p.Threads = flag.Int("threads", 16, "Number of test files to execute at a time.")
-	p.Short = flag.Bool("short", true, "Whether or not to print out a short or extended report")
-	p.Tiny = flag.Bool("tiny", false, "Even tinier report output than what the short flag provides. "+
+	p.Threads = flag.Int("threads", 16, "Max number of test files to execute concurrently")
+	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results")
+	p.Tiny = flag.Bool("tiny", false, "Print an even tinier report output than what the short flag provides. "+
 		"Only prints test status, name, and description. Failed tests will still be expanded")
-	p.ShortErrors = flag.Bool("short-fail", false, "Whether or not the test report will contain extended details for errors. "+
-		"Value is overridden by the short flag if it is enabled")
-	p.Colorize = flag.Bool("colors", true, "Whether to print test report with colors")
-	p.TestFile = flag.String("file", "", "A single test file to execute rather than all running all tests at a given test-root.")
-	p.Interactive = flag.Bool("step", false, "Execute a single test file in interactive mode.")
+	p.ShortErrors = flag.Bool("short-fail", false, "Keep the report short when errors are encountered rather than expanding with details")
+	p.Colorize = flag.Bool("colors", true, "Print test report with colors")
+	p.TestFile = flag.String("file", "", "Single file path to a test suite to execute.")
+	p.Interactive = flag.Bool("step", false, "Execute a single test file in interactive mode. "+
+		"Requires a test file to be provided with '-file'")
 
 	if len(os.Args) <= 1 {
 		flag.Usage()
@@ -260,13 +260,33 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 }
 
 func runTests(args ProgramArgs) bool {
-	multiTestSuite, err := NewMultiSuiteTest(*args.DefaultHost, *args.TestRoot, *args.Fixtures)
-	if err != nil {
-		fmt.Printf("Failed to load tests: %v\n", err)
-		os.Exit(1)
+	var passed bool
+	var err error
+	var results []MultiSuiteResult
+
+	if *args.TestFile != "" {
+		suite, err := NewTestSuite(*args.DefaultHost, *args.TestFile, *args.Fixtures)
+		if err != nil {
+			fmt.Printf("Failed to initialize test file: %v\n", err)
+			return false
+		}
+
+		r := MultiSuiteResult{
+			TestFile: *args.TestFile,
+		}
+		r.Passed, r.Error, r.TestResults = suite.ExecuteTests()
+		results = append(results, r)
+		passed = r.Passed
+		err = r.Error
+	} else if *args.TestRoot != "" {
+		multiTestSuite, err := NewMultiSuiteTest(*args.DefaultHost, *args.TestRoot, *args.Fixtures)
+		if err != nil {
+			fmt.Printf("Failed to load tests: %v\n", err)
+			os.Exit(1)
+		}
+		passed, err, results = multiTestSuite.ExecuteTests(*args.Threads)
 	}
 
-	passed, err, results := multiTestSuite.ExecuteTests(*args.Threads)
 	if err != nil {
 		fmt.Printf("Failed to execute tests: %v\n", err)
 		os.Exit(1)
@@ -333,6 +353,8 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
 		}
 
 		switch strings.ReplaceAll(input, "\n", "") {
+		case "n":
+			return nextTestNo
 		case "e":
 			return -1
 		case "f":

@@ -7,29 +7,61 @@ All you need to provide are your inputs to the route and a validation definition
 The tool will then execute the requests and run your validation against the response and print a pretty report at the end. All tests are
 defined in YAML files, no coding is required.
 
+### The Inspiration
+If you've ever had to write a backend API, you have probably written curl commands or configured PostMan to execute calls against your backend to validate your implementation.
+One pain point with this is that, sometimes you either:
+* don't care about the exact details of the response but only the shape of it
+
+or
+
+* need to copy data from one response to use as input for your next call in a chain of requests
+
+This program helps solve both those problems by allowing you to:
+* set field existence and array length validations
+* field value validations based on exact matches or with regular expressions for string based responses
+* partial item matching in sorted and unsorted array results. You can pick out individual items without needing to match the entire array response
+* storing specific response data for items that match your validations and re-using this stored value as a variable for subsequent test cases
+
+
 ### Features
-* **Test definitions as Config:** Use yaml to define your tests. It's easy to write and less verbose than JSON. You can use anchoring to reduce the amount of copy and paste required
-* **Data Persistence:** You can store results that your validation matches and use them as inputs in subsequent tests
+* **Test definitions as Config:** Use yaml to define your tests. It's easy to write and less verbose than JSON. You can use anchoring to reuse sections or values in multiple places.
+* **Data Persistence:** You can store results that your validation matches and use them as inputs or matchers in subsequent tests
+* **Interactive Mode:** You can run test files in an interactive mode allowing you to retry individual tests, evaluate variables, or dump the data in the data store at that point in the test suite's execution
 
 ### Definitions
 * **Test:** An individual test case that provides an input and validates a response
 * **Test Suite:** A file containing multiple tests
 
+## Installation
+```
+git clone https://github.com/monstercat/integration-checker.git
+cd integration-checker
+go build ./cmd/checker
+```
+
 ## Usage
 ```text
 Usage of ./checker:
   -colors
-        Whether to print test report with colors (default true)
+        Print test report with colors (default true)
+  -file string
+        Single file path to a test suite to execute.
   -fixtures string
         Path to yaml file with data to include into the test scope via test variables. (default "./fixtures.yaml")
   -host string
         Default host url to use with tests. Populates the @{host} variable. (default "http://localhost")
   -short
-        Whether or not to print out a short or extended report (default true)
+        Print a short report for executed tests containing only the validation results (default true)
+  -short-fail
+        Keep the report short when errors are encountered rather than expanding with details
+  -step
+        Execute a single test file in interactive mode. Requires a test file to be provided with '-file'
   -test-root string
         File path to scan and execute test files from (default ".")
   -threads int
-        Number of test files to execute at a time. (default 16)
+        Max number of test files to execute concurrently (default 16)
+  -tiny
+        Print an even tinier report output than what the short flag provides. Only prints test status, name, and description. Failed tests will still be expanded
 ```
 
 
@@ -61,15 +93,13 @@ tests:
                   matches: .*Bar
 ```
 
-Executing the test can be done like so:
-```./checker -test-root="<path to directory containing foo_test.yaml>"```
-
 Sample output:
 ```text
 [Passed] <test-root>/foo_test.yaml
  Passed: 1, Failed: 0, Total:1
 --------------------------------------------------------------------------------
- [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar' -> [GET] http://localhost/foo?search=Bar
+ [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
+ [GET] http://localhost/foo?search=Bar
   [*] response.StatusCode: 200
   [*] .Foo: [length] 1
   [*] .Foo[0].Name: FooBar
@@ -81,6 +111,54 @@ Sample output:
   0     :Failed
 --------------------------------------------------------------------------------
 ```
+
+All tests in a directory can be executed with the `-test-root` flag like so:
+
+```./checker -test-root="<path to directory containing foo_test.yaml>"```
+
+Individual files can be executed using the `-file` flag:
+
+```./checker -file=<path>/foo_test.yaml```
+
+## Interactive Mode
+
+When providing a file input with `-file` along with the `-step=true` parameter, you will execute your test file in an interactive mode:
+
+```bash
+$ ./checker -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true                                                                  Derricks-MBP git: main
+Next test: List Foos - Should list all Foos with a Name ending with 'Bar'
+
+Input options:
+ n) Execute next test
+ e) Halt further testing and exit program
+ f) Exit interactive mode and automatically run remaining tests
+ d) Dump all values in data store
+ *) Expand typed variable. e.g. @{host}
+
+Command: @{host}
+@{host} -> http://localhost
+
+Command: n
+
+ [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
+ [GET] http://localhost/foo?search=Bar
+  [*] response.StatusCode: 200
+  [*] .Foo: [length] 1
+  [*] .Foo[0].Name: FooBar
+
+No more tests
+
+Input options:
+ n) Execute next test
+ r) Retry test
+ e) Halt further testing and exit program
+ f) Exit interactive mode and automatically run remaining tests
+ d) Dump all values in data store
+ *) Expand typed variable. e.g. @{host}
+
+Command:
+```
+
 
 ## Validations
 
@@ -241,11 +319,11 @@ payload:
 Each *Test Suite* has it's own data store that the tests can read and write variables to. Variables are read using `@{myVarName}` notation, and are
 written using the `storeAs` property on your field validator.  
 
-Variables can only be read in the following test fields:
+Variables can only be referenced in the following test fields:
 * input
 * headers
 * route
-
+* validation `matches` fields as strings
 
 
 For example, if we wanted to store the ID  of FooBar from the sample test to use in a subsequent GET call. Our test would look like:
@@ -308,7 +386,7 @@ tests:
 
 ### Environment Variables
 
-The data store will also be pre-populated with your systems environment variables and can be access the same way as any other variable
+The data store will also be pre-populated with your system's environment variables and can be access the same way as any other variable
 
 ```shell
 # Env var
