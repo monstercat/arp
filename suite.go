@@ -149,7 +149,7 @@ func parseVar(input string) VarStack {
 	return resultStack
 }
 
-func (t *DataStore) replaceDataStoreVar(input string) (string, error) {
+func (t *DataStore) ExpandVariable(input string) (string, error) {
 	outputString := input
 	variables := parseVar(input)
 
@@ -226,7 +226,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 
 		return n, nil
 	case string:
-		return t.replaceDataStoreVar(n)
+		return t.ExpandVariable(n)
 	}
 
 	return input, nil
@@ -292,7 +292,7 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 }
 
 func (t *TestCase) GetTestRoute() (string, error) {
-	resolvedRoute, err := t.GlobalDataStore.replaceDataStoreVar(t.Route)
+	resolvedRoute, err := t.GlobalDataStore.ExpandVariable(t.Route)
 	if err != nil {
 		return "", err
 	}

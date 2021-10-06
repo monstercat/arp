@@ -232,7 +232,7 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 			m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
 		}
 	} else if m.Pattern != nil {
-		resolved, err := (*datastore).replaceDataStoreVar(*m.Pattern)
+		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
 		}
@@ -311,7 +311,7 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 			m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
 		}
 	} else if m.Pattern != nil {
-		resolved, err := (*datastore).replaceDataStoreVar(*m.Pattern)
+		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
 		}
@@ -383,7 +383,7 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 	var err error
 
 	if m.Value != nil {
-		resolved, err := (*datastore).replaceDataStoreVar(*m.Value)
+		resolved, err := (*datastore).ExpandVariable(*m.Value)
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Value), store
 		}
@@ -488,7 +488,7 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 			m.ErrorStr = fmt.Sprintf(ArrayLengthErrFmt, "=", *m.Length, responseLength)
 		}
 	} else if m.LengthStr != nil {
-		resolved, err := (*datastore).replaceDataStoreVar(*m.LengthStr)
+		resolved, err := (*datastore).ExpandVariable(*m.LengthStr)
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.LengthStr), store
 		}

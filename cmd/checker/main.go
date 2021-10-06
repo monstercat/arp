@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	. "github.com/monstercat/integration-checker"
 )
@@ -14,11 +15,13 @@ type ProgramArgs struct {
 	DefaultHost *string
 	Fixtures    *string
 	TestRoot    *string
+	TestFile    *string
 	Threads     *int
 	Short       *bool
 	Tiny        *bool
 	ShortErrors *bool
 	Colorize    *bool
+	Interactive *bool
 }
 
 func (p *ProgramArgs) Init() {
@@ -32,6 +35,8 @@ func (p *ProgramArgs) Init() {
 	p.ShortErrors = flag.Bool("short-fail", false, "Whether or not the test report will contain extended details for errors. "+
 		"Value is overridden by the short flag if it is enabled")
 	p.Colorize = flag.Bool("colors", true, "Whether to print test report with colors")
+	p.TestFile = flag.String("file", "", "A single test file to execute rather than all running all tests at a given test-root.")
+	p.Interactive = flag.Bool("step", false, "Execute a single test file in interactive mode.")
 
 	if len(os.Args) <= 1 {
 		flag.Usage()
@@ -163,6 +168,62 @@ func getSuccessString(c Colorizer, status bool, style string) string {
 
 }
 
+func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
+	showErrors := false
+	if !test.Passed {
+		showErrors = !*args.ShortErrors
+	}
+
+	showExtendedReport := !(*args.Short) || showErrors
+	showFieldValidations := showExtendedReport || !*args.Tiny
+
+	details := test.TestCase
+	routeStr := fmt.Sprintf("[%v] %v", c.BrightCyan(details.Method), c.BrightWhite(details.Route))
+	statusStyle := ""
+	if test.TestCase.Skip {
+		statusStyle = "skipped"
+	}
+
+	printIndentedLn(1, "[%v]: %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
+		c.BrightWhite(details.Name), details.Description)
+	printIndentedLn(1, "%v\n", routeStr)
+	if showFieldValidations {
+		sort.Slice(test.Fields, func(i, j int) bool {
+			a := test.Fields[i].ObjectKeyPath
+			b := test.Fields[j].ObjectKeyPath
+
+			return a[0] != b[0] || a < b
+		})
+		for _, f := range test.Fields {
+			fieldStr := f.ObjectKeyPath
+			errStr := f.Error
+			if !f.Status {
+				fieldStr = c.Cyan(fieldStr)
+				errStr = c.BrightYellow(errStr)
+			} else {
+				fieldStr = c.BrightBlue(fieldStr)
+			}
+
+			printIndentedLn(2, "[%v] %v: %v\n", getSuccessString(c, f.Status, "validation"),
+				fieldStr, errStr)
+		}
+	}
+	fmt.Printf("\n")
+
+	if showExtendedReport {
+		printIndentedLn(2, "Route: %v\n", test.ResolvedRoute)
+		printIndentedLn(2, "Status Code: %v\n", test.StatusCode)
+
+		input := YamlToJson(test.TestCase.Input)
+		inputJson, _ := json.MarshalIndent(input, indentStr(2), " ")
+		printIndentedLn(2, "Input: %v\n", string(inputJson))
+
+		data, _ := json.MarshalIndent(test.Response, indentStr(2), " ")
+		printIndentedLn(2, "Response: %v\n\n", string(data))
+		fmt.Printf(c.BrightWhite("---\n"))
+	}
+}
+
 func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuiteResult) {
 	globalFailed := 0
 	globalPassed := 0
@@ -181,60 +242,7 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 		fmt.Printf("%v\n", separator(c))
 
 		for _, test := range r.TestResults.Results {
-			showErrors := false
-			if !test.Passed {
-				showErrors = !*args.ShortErrors
-			}
-
-			showExtendedReport := !(*args.Short) || showErrors
-			showFieldValidations := showExtendedReport || !*args.Tiny
-
-			details := test.TestCase
-			routeStr := fmt.Sprintf("[%v] %v", c.BrightCyan(details.Method), c.BrightWhite(details.Route))
-			statusStyle := ""
-			if test.TestCase.Skip {
-				statusStyle = "skipped"
-			}
-
-			printIndentedLn(1, "[%v]: %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
-				c.BrightWhite(details.Name), details.Description)
-			printIndentedLn(1, "%v\n", routeStr)
-			if showFieldValidations {
-				sort.Slice(test.Fields, func(i, j int) bool {
-					a := test.Fields[i].ObjectKeyPath
-					b := test.Fields[j].ObjectKeyPath
-
-					return a[0] != b[0] || a < b
-				})
-				for _, f := range test.Fields {
-					fieldStr := f.ObjectKeyPath
-					errStr := f.Error
-					if !f.Status {
-						fieldStr = c.Cyan(fieldStr)
-						errStr = c.BrightYellow(errStr)
-					} else {
-						fieldStr = c.BrightBlue(fieldStr)
-					}
-
-					printIndentedLn(2, "[%v] %v: %v\n", getSuccessString(c, f.Status, "validation"),
-						fieldStr, errStr)
-				}
-			}
-			fmt.Printf("\n")
-
-			if showExtendedReport {
-				printIndentedLn(2, "Route: %v\n", test.ResolvedRoute)
-				printIndentedLn(2, "Status Code: %v\n", test.StatusCode)
-
-				input := YamlToJson(test.TestCase.Input)
-				inputJson, _ := json.MarshalIndent(input, indentStr(2), " ")
-				printIndentedLn(2, "Input: %v\n", string(inputJson))
-
-				data, _ := json.MarshalIndent(test.Response, indentStr(2), " ")
-				printIndentedLn(2, "Response: %v\n\n", string(data))
-				fmt.Printf(c.BrightWhite("---\n"))
-			}
-
+			printSingleTestReport(c, args, test)
 		}
 
 		if r.Error != nil {
@@ -277,11 +285,124 @@ func runTests(args ProgramArgs) bool {
 	return passed
 }
 
+func interactivePrompt(showOpts bool, canRetry bool) {
+	options := [][]string{
+		{"n", "n) Execute next test"},
+		{"r", "r) Retry test"},
+		{"e", "e) Halt further testing and exit program"},
+		{"f", "f) Exit interactive mode and automatically run remaining tests"},
+		{"d", "d) Dump all values in data store"},
+		{"v", "*) Expand typed variable. e.g. @{host}"},
+	}
+
+	if showOpts {
+		fmt.Printf("\nInput options:\n")
+		for _, o := range options {
+			command := o[0]
+			text := o[1]
+
+			if command == "r" && !canRetry {
+				continue
+			}
+
+			printIndentedLn(1, "%v\n", text)
+		}
+	}
+	fmt.Printf("\nCommand: ")
+}
+
+func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
+	nextTestNo := curTest + 1
+	canRetry := true
+
+	if result == nil {
+		nextTestNo = curTest
+		canRetry = false
+	}
+
+	if nextTestNo < len(tests) {
+		fmt.Printf("Next test: %v - %v\n", tests[nextTestNo].Name, tests[nextTestNo].Description)
+	} else {
+		fmt.Printf("No more tests")
+	}
+	interactivePrompt(true, canRetry)
+
+	for {
+		input := ""
+		fmt.Scanln(&input)
+
+		if input == "" {
+			return nextTestNo
+		}
+
+		switch strings.ReplaceAll(input, "\n", "") {
+		case "e":
+			return -1
+		case "r":
+			if canRetry {
+				return curTest
+			}
+		case "d":
+			pretty, _ := json.MarshalIndent(tests[curTest].GlobalDataStore, "", indentStr(1))
+			fmt.Printf("%v\n", string(pretty))
+		default:
+			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(input)
+			if err != nil {
+				fmt.Printf("\nFailed to expand variable: %v\n", err)
+			} else {
+				fmt.Printf("%v -> %v\n", input, expanded)
+			}
+		}
+
+		interactivePrompt(false, true)
+
+	}
+}
+
+func interactiveMode(args ProgramArgs) bool {
+	c := Colorizer{
+		Enabled: *args.Colorize,
+	}
+
+	suite, err := NewTestSuite(*args.DefaultHost, *args.TestFile, *args.Fixtures)
+	if err != nil {
+		fmt.Printf("Failed to initialize test file: %v\n", err)
+		return false
+	}
+
+	allPassed := true
+	testNo := interactiveInput(suite.Tests, 0, nil)
+	for testNo >= 0 && testNo < len(suite.Tests) {
+		test := suite.Tests[testNo]
+		passed, err, result := suite.ExecuteTest(&test)
+		allPassed = allPassed && passed
+
+		printSingleTestReport(c, args, result)
+		if err != nil {
+			printIndentedLn(1, c.BrightRed("Some tests failed to execute:\n"))
+			printIndentedLn(1, "%v\n", err)
+			return allPassed
+		}
+
+		testNo = interactiveInput(suite.Tests, testNo, result)
+		fmt.Print("\033[H\033[2J")
+	}
+
+	return allPassed
+}
+
 func main() {
 	args := ProgramArgs{}
 	args.Init()
 
-	if passed := runTests(args); !passed {
+	var passed bool
+	if *args.Interactive {
+		passed = interactiveMode(args)
+	} else {
+		passed = runTests(args)
+	}
+
+	if !passed {
 		os.Exit(1)
 	}
 	os.Exit(0)
