@@ -286,26 +286,23 @@ func runTests(args ProgramArgs) bool {
 }
 
 func interactivePrompt(showOpts bool, canRetry bool) {
-	options := [][]string{
-		{"n", "n) Execute next test"},
-		{"r", "r) Retry test"},
-		{"e", "e) Halt further testing and exit program"},
-		{"f", "f) Exit interactive mode and automatically run remaining tests"},
-		{"d", "d) Dump all values in data store"},
-		{"v", "*) Expand typed variable. e.g. @{host}"},
+	options := []string{
+		"n) Execute next test",
+		"r) Retry test",
+		"e) Halt further testing and exit program",
+		"f) Exit interactive mode and automatically run remaining tests",
+		"d) Dump all values in data store",
+		"*) Expand typed variable. e.g. @{host}",
 	}
 
 	if showOpts {
 		fmt.Printf("\nInput options:\n")
 		for _, o := range options {
-			command := o[0]
-			text := o[1]
-
-			if command == "r" && !canRetry {
+			if strings.HasPrefix(o, "r)") && !canRetry {
 				continue
 			}
 
-			printIndentedLn(1, "%v\n", text)
+			printIndentedLn(1, "%v\n", o)
 		}
 	}
 	fmt.Printf("\nCommand: ")
@@ -350,6 +347,11 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
 			if err != nil {
 				fmt.Printf("\nFailed to expand variable: %v\n", err)
 			} else {
+				if _, ok := expanded.(string); !ok {
+					data, _ := json.MarshalIndent(expanded, "", indentStr(1))
+					expanded = string(data)
+				}
+
 				fmt.Printf("%v -> %v\n", input, expanded)
 			}
 		}

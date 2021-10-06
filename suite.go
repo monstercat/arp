@@ -71,7 +71,18 @@ func YamlToJson(i interface{}) interface{} {
 	return i
 }
 
-func (t *DataStore) resolveVariable(variable string) (string, error) {
+func varToString(variable interface{}, def ...string) string {
+	if variable == nil {
+		if len(def) > 0 {
+			return def[0]
+		} else {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%v", variable)
+}
+
+func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
 	keys := strings.Split(variable, ".")
 	var node interface{}
 	node = *t
@@ -92,7 +103,7 @@ func (t *DataStore) resolveVariable(variable string) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("%v", node), nil
+	return node, nil
 }
 
 type VarStackFrame struct {
@@ -104,6 +115,7 @@ type VarStackFrame struct {
 
 type VarStack struct {
 	Frames []VarStackFrame
+	Extra  string
 }
 
 func (s *VarStack) Push(f VarStackFrame) {
@@ -143,15 +155,26 @@ func parseVar(input string) VarStack {
 			curStackFrame.VarName = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
 			resultStack.Push(*curStackFrame)
 			curStackFrame = varStack.Pop()
+		} else if curStackFrame == nil {
+			resultStack.Extra += string(char)
 		}
 	}
 
 	return resultStack
 }
 
-func (t *DataStore) ExpandVariable(input string) (string, error) {
-	outputString := input
+func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
+	var result interface{}
+	var outputString string
 	variables := parseVar(input)
+
+	if len(variables.Frames) == 0 {
+		return input, nil
+	}
+
+	if variables.Extra != "" {
+		outputString = input
+	}
 
 	type ExtendedStackFrame struct {
 		VarStackFrame
@@ -170,23 +193,42 @@ func (t *DataStore) ExpandVariable(input string) (string, error) {
 		varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
 		resolvedVar, err := t.resolveVariable(varKey)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
 		if v.Nested == 0 {
-			outputString = strings.ReplaceAll(outputString, v.VarName, resolvedVar)
-
+			// if the input contains more text than just the variable, we can assume that it is intended to be replaced
+			// within the string
+			if outputString != "" {
+				outputString = strings.ReplaceAll(outputString, v.VarName, varToString(resolvedVar))
+			} else {
+				// otherwise, just return the node and it'll be converted as needed
+				result = resolvedVar
+			}
 		}
-
-		// once variable is resolved, we want to replace it in all the other variables (if they reference it)
+		// once variable is resolved, we want to expand the other variables that might be composed with it
 		for offset := i + 1; offset < len(toResolve); offset++ {
 			frame := toResolve[offset]
-			frame.ResolvedVarName = strings.ReplaceAll(frame.VarName, v.VarName, resolvedVar)
+
+			if !strings.Contains(frame.ResolvedVarName, v.VarName) {
+				continue
+			}
+
+			if _, ok := resolvedVar.(string); !ok {
+				return nil, fmt.Errorf("Failed to resolve %v as %v does not resolve to a string: %v", frame.VarName, v.VarName, resolvedVar)
+			}
+			// Assumes that people's variables are resolving to proper strings. If not, then they'll get a message
+			// indicating their variable couldn't be resolved anyway.
+			frame.ResolvedVarName = strings.ReplaceAll(frame.ResolvedVarName, v.VarName, varToString(resolvedVar))
 			toResolve[offset] = frame
 		}
+
+	}
+	if outputString != "" {
+		result = outputString
 	}
 
-	return outputString, nil
+	return result, nil
 }
 
 func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}, error) {
@@ -226,7 +268,11 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 
 		return n, nil
 	case string:
-		return t.ExpandVariable(n)
+		res, err := t.ExpandVariable(n)
+		if res == nil {
+			return input, nil
+		}
+		return res, err
 	}
 
 	return input, nil
@@ -296,7 +342,7 @@ func (t *TestCase) GetTestRoute() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return resolvedRoute, nil
+	return varToString(resolvedRoute, t.Route), nil
 }
 
 func (t *TestCase) GetTestInput() (io.Reader, error) {

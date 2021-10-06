@@ -171,7 +171,6 @@ func getMatcherPriority(node map[interface{}]interface{}) int {
 		case int64:
 			return int(val)
 		}
-
 	}
 
 	return 0
@@ -236,15 +235,16 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
 		}
+		resolvedStr := varToString(resolved, *m.Pattern)
 
-		if resolved == Any {
+		if resolvedStr == Any {
 			status = true
 		} else {
-			status, err = matchPattern(resolved,
+			status, err = matchPattern(resolvedStr,
 				[]byte(strconv.FormatInt(int64(typedResponseValue), 10)))
 
 			if !status {
-				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, *m.Pattern)
+				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolvedStr)
 			}
 		}
 	}
@@ -315,12 +315,12 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
 		}
-
-		if resolved == Any {
+		resolvedStr := varToString(resolved, *m.Pattern)
+		if resolvedStr == Any {
 			status = true
 		} else {
 			var res bool
-			res, err = strconv.ParseBool(resolved)
+			res, err = strconv.ParseBool(resolvedStr)
 			result := res == typedResponseValue
 			if !result {
 				m.ErrorStr = fmt.Sprintf(ValueErrFmt, res, typedResponseValue)
@@ -387,8 +387,9 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Value), store
 		}
+		resolvedStr := varToString(resolved, *m.Value)
 
-		switch resolved {
+		switch resolvedStr {
 		case Any:
 			status = true
 		case NotEmpty:
@@ -397,9 +398,9 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 				m.ErrorStr = fmt.Sprintf(NotEmptyErrFmt, typedResponseValue)
 			}
 		default:
-			status, err = matchPattern(resolved, []byte(typedResponseValue))
+			status, err = matchPattern(resolvedStr, []byte(typedResponseValue))
 			if !status {
-				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolved)
+				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolvedStr)
 			}
 		}
 	}
@@ -492,7 +493,7 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 		if err != nil {
 			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.LengthStr), store
 		}
-		s := resolved
+		s := varToString(resolved, *m.LengthStr)
 
 		switch s {
 		case NotEmpty:
