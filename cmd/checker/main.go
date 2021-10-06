@@ -335,6 +335,8 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
 		switch strings.ReplaceAll(input, "\n", "") {
 		case "e":
 			return -1
+		case "f":
+			return -2
 		case "r":
 			if canRetry {
 				return curTest
@@ -373,7 +375,15 @@ func interactiveMode(args ProgramArgs) bool {
 	}
 
 	allPassed := true
-	testNo := interactiveInput(suite.Tests, 0, nil)
+	continueInteractive := true
+
+	testNo := 0
+	cmd := interactiveInput(suite.Tests, 0, nil)
+	if cmd < -1 {
+		continueInteractive = false
+	} else {
+		testNo = cmd
+	}
 	for testNo >= 0 && testNo < len(suite.Tests) {
 		test := suite.Tests[testNo]
 		passed, err, result := suite.ExecuteTest(&test)
@@ -386,8 +396,18 @@ func interactiveMode(args ProgramArgs) bool {
 			return allPassed
 		}
 
-		testNo = interactiveInput(suite.Tests, testNo, result)
-		fmt.Print("\033[H\033[2J")
+		if continueInteractive {
+			cmd = interactiveInput(suite.Tests, testNo, result)
+			if cmd < -1 {
+				continueInteractive = false
+			} else {
+				testNo = cmd
+			}
+
+			fmt.Print("\033[H\033[2J")
+		} else {
+			testNo += 1
+		}
 	}
 
 	return allPassed
