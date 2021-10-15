@@ -1,5 +1,5 @@
-# integration-checker
-Tool for making JSON API calls that can be used for integration tests, simulation, checks, etc.
+# Arp
+Short for Arpeggio, is a tool for automating **REST** JSON API calls that can be used for integration tests, simulation, checks, etc.
 
 ## About
 This tool provides a lightweight black-box testing framework for your API. 
@@ -34,22 +34,20 @@ This program helps solve both those problems by allowing you to:
 
 ## Installation
 ```
-git clone https://github.com/monstercat/integration-checker.git
-cd integration-checker
-go build ./cmd/checker
+git clone https://github.com/monstercat/arp.git
+cd arp
+go build ./cmd/arp
 ```
 
 ## Usage
 ```text
-Usage of ./checker:
+Usage of ./arp:
   -colors
         Print test report with colors (default true)
   -file string
         Single file path to a test suite to execute.
   -fixtures string
         Path to yaml file with data to include into the test scope via test variables. (default "./fixtures.yaml")
-  -host string
-        Default host url to use with tests. Populates the @{host} variable. (default "http://localhost")
   -short
         Print a short report for executed tests containing only the validation results (default true)
   -short-fail
@@ -57,11 +55,13 @@ Usage of ./checker:
   -step
         Execute a single test file in interactive mode. Requires a test file to be provided with '-file'
   -test-root string
-        File path to scan and execute test files from (default ".")
+        File path to scan and execute test files from
   -threads int
         Max number of test files to execute concurrently (default 16)
   -tiny
         Print an even tinier report output than what the short flag provides. Only prints test status, name, and description. Failed tests will still be expanded
+  -var value
+        Prepopulate the tests data store with a KEY=VALUE pair.
 ```
 
 
@@ -114,18 +114,18 @@ Sample output:
 
 All tests in a directory can be executed with the `-test-root` flag like so:
 
-```./checker -test-root="<path to directory containing foo_test.yaml>"```
+```./arp -test-root="<path to directory containing foo_test.yaml>"```
 
 Individual files can be executed using the `-file` flag:
 
-```./checker -file=<path>/foo_test.yaml```
+```./arp -file=<path>/foo_test.yaml```
 
 ## Interactive Mode
 
 When providing a file input with `-file` along with the `-step=true` parameter, you will execute your test file in an interactive mode:
 
 ```bash
-$ ./checker -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true                                                                  Derricks-MBP git: main
+$ ./arp -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true -var='host=http://localhost'                                                                 Derricks-MBP git: main
 Next test: List Foos - Should list all Foos with a Name ending with 'Bar'
 
 Input options:
@@ -401,6 +401,13 @@ tests:
       # populate our apiToken input field with our environment variable value
       apiToken: @{MY_API_TOKEN}
     ...
+```
+
+### Var Parameters
+Alternatively, you can provide variables with one or more `-var` input parameters using `KEY=VALUE` syntax:
+
+```bash
+./arp -test-root=. -var='MY_API_TOKEN=adfadfadfadfa' -var='SOMETHING_ELSE=not the token'
 ```
 
 

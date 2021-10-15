@@ -7,12 +7,23 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	. "github.com/monstercat/integration-checker"
 )
 
+type varFlags []string
+
+func (v *varFlags) String() string {
+	return strings.Join(*v, ",")
+}
+
+func (v *varFlags) Set(value string) error {
+	*v = append(*v, strings.TrimSpace(value))
+	return nil
+}
+
 type ProgramArgs struct {
-	DefaultHost *string
 	Fixtures    *string
 	TestRoot    *string
 	TestFile    *string
@@ -22,12 +33,12 @@ type ProgramArgs struct {
 	ShortErrors *bool
 	Colorize    *bool
 	Interactive *bool
+	Variables   varFlags
 }
 
 func (p *ProgramArgs) Init() {
-	p.DefaultHost = flag.String("host", "http://localhost", "Default host url to use with tests. Populates the @{host} variable.")
 	p.Fixtures = flag.String("fixtures", "./fixtures.yaml", "Path to yaml file with data to include into the test scope via test variables.")
-	p.TestRoot = flag.String("test-root", ".", "File path to scan and execute test files from")
+	p.TestRoot = flag.String("test-root", "", "File path to scan and execute test files from")
 	p.Threads = flag.Int("threads", 16, "Max number of test files to execute concurrently")
 	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results")
 	p.Tiny = flag.Bool("tiny", false, "Print an even tinier report output than what the short flag provides. "+
@@ -37,6 +48,8 @@ func (p *ProgramArgs) Init() {
 	p.TestFile = flag.String("file", "", "Single file path to a test suite to execute.")
 	p.Interactive = flag.Bool("step", false, "Execute a single test file in interactive mode. "+
 		"Requires a test file to be provided with '-file'")
+
+	flag.Var(&p.Variables, "var", "Prepopulate the tests data store with a KEY=VALUE pair.")
 
 	if len(os.Args) <= 1 {
 		flag.Usage()
@@ -127,12 +140,10 @@ func printIndentedLn(indentLevel int, format string, args ...interface{}) {
 
 	var newArgs []interface{}
 	newArgs = append(newArgs, indentStr(indentLevel))
-	//newArgs = append(newArgs, args...)
 	for _, a := range args {
 		newArgs = append(newArgs, a)
 	}
 
-	//fmt.Printf("Format: %v", indentFmt)
 	fmt.Printf(indentFmt, newArgs...)
 }
 
@@ -165,7 +176,6 @@ func getSuccessString(c Colorizer, status bool, style string) string {
 	case "skipped":
 		return c.BrightGrey("Skipped")
 	}
-
 }
 
 func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
@@ -184,8 +194,12 @@ func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
 		statusStyle = "skipped"
 	}
 
-	printIndentedLn(1, "[%v]: %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
+	delta := test.EndTime.Sub(test.StartTime)
+	timeStr := fmt.Sprintf("%v: %v", c.BrightWhite("Test Duration"), delta)
+
+	printIndentedLn(1, "[%v] %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
 		c.BrightWhite(details.Name), details.Description)
+	printIndentedLn(2, "%v\n", timeStr)
 	printIndentedLn(1, "%v\n", routeStr)
 	if showFieldValidations {
 		sort.Slice(test.Fields, func(i, j int) bool {
@@ -227,17 +241,19 @@ func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
 func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuiteResult) {
 	globalFailed := 0
 	globalPassed := 0
+	var globalTestDuration time.Duration
 
 	fmt.Printf("\n\n")
 	for _, r := range results {
 		printIndentedLn(0, "[%v] %v\n", getSuccessString(c, r.Passed, ""),
 			c.Underline(c.BrightWhite(r.TestFile)))
-
+		printIndentedLn(1, "Suite Duration: %v\n", r.TestResults.Duration)
 		printIndentedLn(1, "Passed: %v, Failed: %v, Total:%v\n", r.TestResults.Passed,
 			r.TestResults.Failed, r.TestResults.Total)
 
 		globalFailed += r.TestResults.Failed
 		globalPassed += r.TestResults.Passed
+		globalTestDuration += r.TestResults.Duration
 
 		fmt.Printf("%v\n", separator(c))
 
@@ -253,10 +269,29 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 	}
 
 	fmt.Printf("%v\n", separator(c))
-	printIndentedLn(0, "[%v] %v\n", getSuccessString(c, passed, ""), c.BrightWhite(*args.TestRoot))
+	path := *args.TestRoot
+	if path == "" {
+		path = *args.TestFile
+	}
+
+	printIndentedLn(0, "[%v] %v\n", getSuccessString(c, passed, ""), c.BrightWhite(path))
 	printIndentedLn(0, "%-6[2]d:Total Tests\n%-6[3]d:Passed\n%-6[4]d:Failed\n", 0, globalPassed, globalFailed)
+	printIndentedLn(0, "\nTotal Execution Time: %v\n", globalTestDuration)
 	fmt.Printf("%v\n", separator(c))
 
+}
+
+func populateDataStore(ds *DataStore, vars varFlags) {
+	(*ds)["host"] = "http://localhost"
+	for _, v := range vars {
+		pair := strings.SplitN(v, "=", 2)
+
+		if len(pair) < 2 {
+			fmt.Printf("Badly formatted var excluded from test data store: %v\n", v)
+			continue
+		}
+		(*ds)[pair[0]] = pair[1]
+	}
 }
 
 func runTests(args ProgramArgs) bool {
@@ -265,11 +300,12 @@ func runTests(args ProgramArgs) bool {
 	var results []MultiSuiteResult
 
 	if *args.TestFile != "" {
-		suite, err := NewTestSuite(*args.DefaultHost, *args.TestFile, *args.Fixtures)
+		suite, err := NewTestSuite(*args.TestFile, *args.Fixtures)
 		if err != nil {
 			fmt.Printf("Failed to initialize test file: %v\n", err)
 			return false
 		}
+		populateDataStore(&suite.GlobalDataStore, args.Variables)
 
 		r := MultiSuiteResult{
 			TestFile: *args.TestFile,
@@ -279,11 +315,16 @@ func runTests(args ProgramArgs) bool {
 		passed = r.Passed
 		err = r.Error
 	} else if *args.TestRoot != "" {
-		multiTestSuite, err := NewMultiSuiteTest(*args.DefaultHost, *args.TestRoot, *args.Fixtures)
+		multiTestSuite, err := NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)
 		if err != nil {
 			fmt.Printf("Failed to load tests: %v\n", err)
 			os.Exit(1)
 		}
+
+		for _, suite := range multiTestSuite.Suites {
+			populateDataStore(&suite.GlobalDataStore, args.Variables)
+		}
+
 		passed, err, results = multiTestSuite.ExecuteTests(*args.Threads)
 	}
 
@@ -305,6 +346,13 @@ func runTests(args ProgramArgs) bool {
 	return passed
 }
 
+type StepInput struct {
+	FallThrough        bool
+	StepThroughToError bool
+	Exit               bool
+	Retry              bool
+}
+
 func interactivePrompt(showOpts bool, canRetry bool) {
 	options := []string{
 		"n) Execute next test",
@@ -312,6 +360,7 @@ func interactivePrompt(showOpts bool, canRetry bool) {
 		"e) Halt further testing and exit program",
 		"f) Exit interactive mode and automatically run remaining tests",
 		"d) Dump all values in data store",
+		"x) Step through tests until next failure",
 		"*) Expand typed variable. e.g. @{host}",
 	}
 
@@ -328,7 +377,7 @@ func interactivePrompt(showOpts bool, canRetry bool) {
 	fmt.Printf("\nCommand: ")
 }
 
-func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
+func interactiveInput(tests []TestCase, curTest int, result *TestResult) StepInput {
 	nextTestNo := curTest + 1
 	canRetry := true
 
@@ -349,23 +398,25 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
 		fmt.Scanln(&input)
 
 		if input == "" {
-			return nextTestNo
+			return StepInput{}
 		}
 
 		switch strings.ReplaceAll(input, "\n", "") {
 		case "n":
-			return nextTestNo
+			return StepInput{}
 		case "e":
-			return -1
+			return StepInput{Exit: true}
 		case "f":
-			return -2
+			return StepInput{FallThrough: true}
 		case "r":
 			if canRetry {
-				return curTest
+				return StepInput{Retry: true}
 			}
 		case "d":
 			pretty, _ := json.MarshalIndent(tests[curTest].GlobalDataStore, "", indentStr(1))
 			fmt.Printf("%v\n", string(pretty))
+		case "x":
+			return StepInput{FallThrough: true, StepThroughToError: true}
 		default:
 			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(input)
 			if err != nil {
@@ -381,7 +432,6 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) int {
 		}
 
 		interactivePrompt(false, true)
-
 	}
 }
 
@@ -390,23 +440,18 @@ func interactiveMode(args ProgramArgs) bool {
 		Enabled: *args.Colorize,
 	}
 
-	suite, err := NewTestSuite(*args.DefaultHost, *args.TestFile, *args.Fixtures)
+	suite, err := NewTestSuite(*args.TestFile, *args.Fixtures)
 	if err != nil {
 		fmt.Printf("Failed to initialize test file: %v\n", err)
 		return false
 	}
 
 	allPassed := true
-	continueInteractive := true
+	var stepInput StepInput
 
 	testNo := 0
-	cmd := interactiveInput(suite.Tests, 0, nil)
-	if cmd < -1 {
-		continueInteractive = false
-	} else {
-		testNo = cmd
-	}
-	for testNo >= 0 && testNo < len(suite.Tests) {
+	stepInput = interactiveInput(suite.Tests, 0, nil)
+	for !stepInput.Exit && testNo < len(suite.Tests) {
 		test := suite.Tests[testNo]
 		passed, err, result := suite.ExecuteTest(&test)
 		allPassed = allPassed && passed
@@ -418,14 +463,15 @@ func interactiveMode(args ProgramArgs) bool {
 			return allPassed
 		}
 
-		if continueInteractive {
-			cmd = interactiveInput(suite.Tests, testNo, result)
-			if cmd < -1 {
-				continueInteractive = false
-			} else {
-				testNo = cmd
-			}
+		if !passed && stepInput.StepThroughToError {
+			stepInput.FallThrough = false
+		}
 
+		if !stepInput.FallThrough {
+			stepInput = interactiveInput(suite.Tests, testNo, result)
+			if !stepInput.Retry {
+				testNo += 1
+			}
 			fmt.Print("\033[H\033[2J")
 		} else {
 			testNo += 1

@@ -19,18 +19,18 @@ type MultiSuiteResult struct {
 	TestFile    string
 }
 
-func NewMultiSuiteTest(defaultHost string, testDir string, fixtures string) (*MultiTestSuite, error) {
+func NewMultiSuiteTest(testDir string, fixtures string) (*MultiTestSuite, error) {
 	multiSuite := &MultiTestSuite{
 		Suites: map[string]*TestSuite{},
 	}
-	err := multiSuite.LoadTests(defaultHost, testDir, fixtures)
+	err := multiSuite.LoadTests(testDir, fixtures)
 	return multiSuite, err
 }
 
-func (t *MultiTestSuite) LoadTests(defaultHost string, testDir string, fixtures string) error {
+func (t *MultiTestSuite) LoadTests(testDir string, fixtures string) error {
 	err := filepath.Walk(testDir, func(path string, info os.FileInfo, err error) error {
 		if strings.HasSuffix(path, ".yaml") {
-			suite, err := NewTestSuite(defaultHost, path, fixtures)
+			suite, err := NewTestSuite(path, fixtures)
 			if err != nil {
 				return err
 			}

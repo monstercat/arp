@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -46,13 +47,16 @@ type TestResult struct {
 	Response      map[string]interface{}
 	ResolvedRoute string
 	StatusCode    int
+	StartTime     time.Time
+	EndTime       time.Time
 }
 
 type SuiteResult struct {
-	Results []*TestResult
-	Passed  int
-	Failed  int
-	Total   int
+	Results  []*TestResult
+	Passed   int
+	Failed   int
+	Total    int
+	Duration time.Duration
 }
 
 func YamlToJson(i interface{}) interface{} {
@@ -401,13 +405,13 @@ func (t *TestCase) Validate(statusCode int, response map[string]interface{}) (bo
 	return status && statusCodeResult.Status, err, newResults
 }
 
-func NewTestSuite(defaultHost string, testFile string, fixtures string) (*TestSuite, error) {
+func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	suite := &TestSuite{
 		GlobalDataStore: DataStore{},
 		Client:          http.Client{},
 	}
 
-	err := suite.InitializeDataStore(defaultHost, fixtures)
+	err := suite.InitializeDataStore(fixtures)
 	if err != nil {
 		return suite, err
 	}
@@ -452,9 +456,7 @@ func (t *TestSuite) LoadFixtures(fixtures string) (map[string]interface{}, error
 	return YamlToJson(config).(map[string]interface{}), nil
 }
 
-func (t *TestSuite) InitializeDataStore(defaultHost string, fixtures string) error {
-	t.GlobalDataStore["host"] = defaultHost
-
+func (t *TestSuite) InitializeDataStore(fixtures string) error {
 	f, err := t.LoadFixtures(fixtures)
 	if err != nil {
 		return err
@@ -513,35 +515,37 @@ func (t *TestSuite) LoadTests(testFile string) (bool, error) {
 	return true, nil
 }
 
-func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
+func (t *TestSuite) ExecuteTest(test *TestCase) (passed bool, err error, result *TestResult) {
 	var request *http.Request
 	var response *http.Response
-	var err error
-	results := &TestResult{
-		TestCase: *test,
+	result = &TestResult{
+		TestCase:  *test,
+		StartTime: time.Now().UTC(),
 	}
 
+	defer func() { result.EndTime = time.Now().UTC() }()
+
 	if test.Skip {
-		results.Fields = []*FieldMatcherResult{
+		result.Fields = []*FieldMatcherResult{
 			{
 				Error:         "Skipping test as configured",
 				ObjectKeyPath: "test.skip",
 				Status:        true,
 			},
 		}
-		results.Passed = true
-		return true, nil, results
+		result.Passed = true
+		return true, nil, result
 	}
 
 	route, err := test.GetTestRoute()
 	if err != nil {
-		return false, fmt.Errorf("Failed to determine test route: %v", err), results
+		return false, fmt.Errorf("Failed to determine test route: %v", err), result
 	}
-	results.ResolvedRoute = route
+	result.ResolvedRoute = route
 
 	input, err := test.GetTestInput()
 	if err != nil {
-		return false, fmt.Errorf("Failed to get test input: %v", err), results
+		return false, fmt.Errorf("Failed to get test input: %v", err), result
 	}
 
 	switch test.Method {
@@ -553,7 +557,7 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
 
 	headers, err := test.GetTestHeaders()
 	if err != nil {
-		return false, fmt.Errorf("Failed to resolve test headers parameter: %v", err), results
+		return false, fmt.Errorf("Failed to resolve test headers parameter: %v", err), result
 	}
 	headersMap := headers.(map[interface{}]interface{})
 	for k := range headersMap {
@@ -568,14 +572,13 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
 
 	response, err = t.Client.Do(request)
 	if err != nil {
-		return false, fmt.Errorf("Failed to fetch API response: %v", err), results
+		return false, fmt.Errorf("Failed to fetch API response: %v", err), result
 	}
-
-	results.StatusCode = response.StatusCode
+	result.StatusCode = response.StatusCode
 
 	responseData, err := ioutil.ReadAll(response.Body)
 	if err != nil {
-		return false, fmt.Errorf("Failed to fetch API response: %v", err), results
+		return false, fmt.Errorf("Failed to fetch API response: %v", err), result
 	}
 
 	var responseJson map[string]interface{}
@@ -583,17 +586,17 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (bool, error, *TestResult) {
 
 		err = json.Unmarshal(responseData, &responseJson)
 		if err != nil {
-			return false, fmt.Errorf("Failed to unmarshal API response: %v\n%v", err, responseData), results
+			return false, fmt.Errorf("Failed to unmarshal API response: %v\n%v", err, responseData), result
 		}
 
 	}
-	results.Response = responseJson
-	results.Passed, err, results.Fields = test.Validate(response.StatusCode, responseJson)
+	result.Response = responseJson
+	result.Passed, err, result.Fields = test.Validate(response.StatusCode, responseJson)
 	if t.AfterEachTest != nil {
-		t.AfterEachTest(test, response, results.Passed, results.Fields)
+		t.AfterEachTest(test, response, result.Passed, result.Fields)
 	}
 
-	return results.Passed, err, results
+	return result.Passed, err, result
 }
 
 func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
@@ -619,7 +622,7 @@ func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
 			anyFailed = true
 			suiteResults.Failed += 1
 		}
-
+		suiteResults.Duration += results.EndTime.Sub(results.StartTime)
 		suiteResults.Results = append(suiteResults.Results, results)
 	}
 

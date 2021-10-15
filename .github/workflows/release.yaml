@@ -17,7 +17,7 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
-        project_path: "./cmd/checker"
-        binary_name: "checker"
+        project_path: "./cmd/arp"
+        binary_name: "arp"
         extra_files: LICENSE README.md
         asset_name: checker-${{ matrix.goos }}-${{ matrix.goarch }}
