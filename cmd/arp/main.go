@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/monstercat/integration-checker"
+	. "github.com/monstercat/arp"
 )
 
 type varFlags []string
@@ -445,6 +445,7 @@ func interactiveMode(args ProgramArgs) bool {
 		fmt.Printf("Failed to initialize test file: %v\n", err)
 		return false
 	}
+	populateDataStore(&suite.GlobalDataStore, args.Variables)
 
 	allPassed := true
 	var stepInput StepInput

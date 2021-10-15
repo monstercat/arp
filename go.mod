@@ -1,4 +1,4 @@
-module github.com/monstercat/integration-checker
+module github.com/monstercat/arp
 
 go 1.17
 

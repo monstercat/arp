@@ -2,35 +2,36 @@
 Short for Arpeggio, is a tool for automating **REST** JSON API calls that can be used for integration tests, simulation, checks, etc.
 
 ## About
-This tool provides a lightweight black-box testing framework for your API. 
+This tool provides a lightweight black-box testing framework for your REST API. 
 All you need to provide are your inputs to the route and a validation definition for the response. 
-The tool will then execute the requests and run your validation against the response and print a pretty report at the end. All tests are
-defined in YAML files, no coding is required.
+The tool will then execute the requests, run your validation against the response, and then print a pretty report at the end. All tests are
+written as YAML configs so no coding is required.
 
 ### The Inspiration
-If you've ever had to write a backend API, you have probably written curl commands or configured PostMan to execute calls against your backend to validate your implementation.
-One pain point with this is that, sometimes you either:
-* don't care about the exact details of the response but only the shape of it
+If you've ever had to write a backend API, you have probably written curl commands or configured PostMan to execute calls against your API for testing purposes. In this testing process, you have probably encountered one or more of the following scenarios:
+1. You don't care about the exact details of the API response, but are only looking to validate the shape of it
+2. You want to perform an exact match on the API response with a known good response
+3. Your API call depends on the response of another API call that you have to manually copy and paste into the input of your current test
+4. Repeat 3 as many times as it takes to get to the API state you are trying to validate.
 
-or
+This program helps solve those problems by allowing you to:
+* Define validations based on the shape of the response
+* Perform exact or fuzzy matching on values within the response
+* Filter for items in the response and pick out specific data to use as an input for future test cases
 
-* need to copy data from one response to use as input for your next call in a chain of requests
+It basically tries to automate the process for why you are writing a curl command or setting PostMan up for in the first place. If you were going through the effort to use curl or PostMan for validation, it is 
+not much more effort to extend that into a repeatable test case.
 
-This program helps solve both those problems by allowing you to:
-* set field existence and array length validations
-* field value validations based on exact matches or with regular expressions for string based responses
-* partial item matching in sorted and unsorted array results. You can pick out individual items without needing to match the entire array response
-* storing specific response data for items that match your validations and re-using this stored value as a variable for subsequent test cases
-
+### Definitions
+* **Test:** An individual test case that provides an input and validates a response
+* **Test Suite:** A file containing multiple tests
+* **Validation Definition:** A structure containing rules on how to validate a specific response property
+* **Validation Matcher:** A comparison value/placeholder to evaluate against a primitive data type within the response (e.g. bool, string, int) 
 
 ### Features
 * **Test definitions as Config:** Use yaml to define your tests. It's easy to write and less verbose than JSON. You can use anchoring to reuse sections or values in multiple places.
 * **Data Persistence:** You can store results that your validation matches and use them as inputs or matchers in subsequent tests
 * **Interactive Mode:** You can run test files in an interactive mode allowing you to retry individual tests, evaluate variables, or dump the data in the data store at that point in the test suite's execution
-
-### Definitions
-* **Test:** An individual test case that provides an input and validates a response
-* **Test Suite:** A file containing multiple tests
 
 ## Installation
 ```
@@ -78,10 +79,10 @@ tests:
     description: Should list all Foos with a Name ending with 'Bar'
     method: GET
     route: 'http://localhost/foo?search=Bar'
-    response:
+    response: # start of validation definition
       code: 200
       # expecting a payload of {Foo: [{Name: "FooBar"}]}
-      payload:
+      payload: 
         Foo:
           type: array
           length: 1
@@ -92,6 +93,15 @@ tests:
                   type: string
                   matches: .*Bar
 ```
+
+All tests in a directory can be executed with the `-test-root` flag like so:
+
+```./arp -test-root="<path to directory containing foo_test.yaml>"```
+
+Individual files can be executed using the `-file` flag:
+
+```./arp -file=<path>/foo_test.yaml```
+
 
 Sample output:
 ```text
@@ -112,63 +122,28 @@ Sample output:
 --------------------------------------------------------------------------------
 ```
 
-All tests in a directory can be executed with the `-test-root` flag like so:
-
-```./arp -test-root="<path to directory containing foo_test.yaml>"```
-
-Individual files can be executed using the `-file` flag:
-
-```./arp -file=<path>/foo_test.yaml```
-
-## Interactive Mode
-
-When providing a file input with `-file` along with the `-step=true` parameter, you will execute your test file in an interactive mode:
-
-```bash
-$ ./arp -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true -var='host=http://localhost'                                                                 Derricks-MBP git: main
-Next test: List Foos - Should list all Foos with a Name ending with 'Bar'
-
-Input options:
- n) Execute next test
- e) Halt further testing and exit program
- f) Exit interactive mode and automatically run remaining tests
- d) Dump all values in data store
- *) Expand typed variable. e.g. @{host}
-
-Command: @{host}
-@{host} -> http://localhost
-
-Command: n
-
- [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
- [GET] http://localhost/foo?search=Bar
-  [*] response.StatusCode: 200
-  [*] .Foo: [length] 1
-  [*] .Foo[0].Name: FooBar
-
-No more tests
-
-Input options:
- n) Execute next test
- r) Retry test
- e) Halt further testing and exit program
- f) Exit interactive mode and automatically run remaining tests
- d) Dump all values in data store
- *) Expand typed variable. e.g. @{host}
-
-Command:
-```
-
 
 ## Validations
 
 Each JSON data type has its own set of validation rules that can be applied.
 
+### Integers
+```yaml
+payload:
+  MyInteger:
+    type: integer
+    matches: <matcher>
+```
+
+Supported matchers:
+* a specific integer value: e.g. -1, 0, 1, 2, 3, ...
+* The **$any** key word to match regardless of the numerical value
+
 ### Numbers
 ```yaml
 payload:
   MyNumber:
-    type: integer # todo: need to update this to just 'number'
+    type: number
     matches: <matcher>
 ```
 
@@ -234,8 +209,9 @@ payload:
         matches: $any
 ```
 
-In the event that you are validating a large array response and you are looking to seek out a specific element from it. You can use the `sorted` property to have the validation
-perform a depth first search for a node matching the validation. E.g:
+You can set the `sorted` property to false in the event that you are validating a large array response and are looking to seek out a specific item from it. This will have the validation
+perform a depth first search for the first node the validation matches on.
+
 
 ```yaml
 payload:
@@ -252,8 +228,8 @@ payload:
 
 ```
 
-This mechanism can be used to 'pick' values from the response to put into the data store. However, you need to ensure the most specific validation is executed first to locate the correct node. Otherwise
-you may get an unexpected node that matches the more general result.
+This mechanism can be used to 'pick' values from the response to put into the data store for use later. However, you need to ensure the most specific validation is executed first to locate the correct node. Otherwise
+you may get an unexpected node that the more general validation matched on first.
 
 ```yaml
 # Get the ID for MySpecificPerson and store it in the data store for a future test
@@ -279,10 +255,6 @@ payload:
             storeAs: test_id
 
 ```
-
-
-
-
 
 ### Objects
 ```yaml
@@ -316,14 +288,46 @@ payload:
 
 ## Data Storage
 
-Each *Test Suite* has it's own data store that the tests can read and write variables to. Variables are read using `@{myVarName}` notation, and are
-written using the `storeAs` property on your field validator.  
+Each *Test Suite* has its own isolated data store that the tests can read and write variables to. Variables are read using `@{myVarName}` notation, and are
+saved using the `storeAs` property on your field matcher.  
 
-Variables can only be referenced in the following test fields:
+Variables can only be referenced in the following test definition fields:
 * input
+```yaml
+tests:
+  - name: Something
+    input:
+       api_token: @{MY_API_KEY}
+---
+```
+
+
 * headers
+```yaml
+tests:
+  - name: Something
+    headers:
+      SomeHeader: @{headerStuff}
+---
+```
+
 * route
+```yaml
+tests:
+  - name: Something
+    route: '@{host}/user/@{user_id}'
+---
+```
+
 * validation `matches` fields as strings
+```yaml
+---
+payload:
+  Name:
+    type: string
+    matches: '@{name}'
+---
+```
 
 
 For example, if we wanted to store the ID  of FooBar from the sample test to use in a subsequent GET call. Our test would look like:
@@ -366,8 +370,8 @@ tests:
 
 ### Fixtures
 
-The data store can be pre-populated with read only data prior to executing your tests with a file containing data definitions. This file should consist of a map(s) that terminate to
-a string. E.g.
+The data store can be pre-populated with read only data prior to executing your tests with a file containing data definitions. This file should consist of a maps that terminate to
+a string value. E.g.
 
 ```yaml
 #fixtures.yaml
@@ -404,7 +408,7 @@ tests:
 ```
 
 ### Var Parameters
-Alternatively, you can provide variables with one or more `-var` input parameters using `KEY=VALUE` syntax:
+Alternatively, you can provide variables with one or more `-var` input parameters following the `KEY=VALUE` syntax:
 
 ```bash
 ./arp -test-root=. -var='MY_API_TOKEN=adfadfadfadfa' -var='SOMETHING_ELSE=not the token'
@@ -412,35 +416,81 @@ Alternatively, you can provide variables with one or more `-var` input parameter
 
 
 ### Variable Composition
-Variables can also be composed of other variables. For example, lets say we want the host to be determined dynamically based on our systems environment variable:
+Variables can also be composed of other variables, or in other words, you can have a variable in the name of a variable:
 
+```yaml
+'@{Hosts.@{HOST_STAGE}}/foo'
+```
+
+Variables are resolved at run time starting from the most nested variable. If we had the following fixture file
+```yaml
+# fixtures.yaml
+Hosts:
+    Beta: http://localhost
+    Prod: http://NotLocalHost.com
+```
+
+And we set the HOST_STAGE to beta as an environment variable:
 ```shell
 #Env Var
 export HOST_STAGE="Beta"
 ```
 
-```yaml
-# fixtures.yaml
-Hosts:
-  Beta: http://localhost
-  Prod: http://NotLocalHost.com
+```@{Hosts.@{HOST_STAGE}}/foo``` would be resolved as follows:
+1. `@{Hosts.@{HOST_STAGE}}/foo` `[@{HOST_STAGE} -> "Beta"]` -> `@{Hosts.Beta}/foo`
+2. `@{Hosts.Beta}/foo` `[@{Hosts.Beta} -> http://localhost]` -> `http://localhost/foo`
 
-# foo_test.yaml
-tests:
-  - name: List Foos
-    # This will be expanded at run time
-    # First @{HOST_STAGE} will be resolved to "Beta" -> @{Hosts.Beta}
-    # Then @{Hosts.Beta} resolves to 'http://localhost'
-    route: '@{Hosts.@{HOST_STAGE}}/foo
-...
+
+
+
+## Interactive Mode
+
+You can execute a test file in interactive mode by specifying your test file with the `-file` parameter along with `-step`.
+
+```bash
+$ ./arp -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true -var='host=http://localhost'
+Next test: List Foos - Should list all Foos with a Name ending with 'Bar'
+
+Input options:
+ n) Execute next test
+ e) Halt further testing and exit program
+ f) Exit interactive mode and automatically run remaining tests
+ d) Dump all values in data store
+ x) Step through tests until next failure
+ *) Expand typed variable. e.g. @{host}
+
+Command: @{host}
+@{host} -> http://localhost
+
+Command: n
+
+ [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
+ [GET] http://localhost/foo?search=Bar
+  [*] response.StatusCode: 200
+  [*] .Foo: [length] 1
+  [*] .Foo[0].Name: FooBar
+
+No more tests
+
+Input options:
+ n) Execute next test
+ r) Retry test
+ e) Halt further testing and exit program
+ f) Exit interactive mode and automatically run remaining tests
+ d) Dump all values in data store
+ x) Step through tests until next failure
+ *) Expand typed variable. e.g. @{host}
+
+Command:
 ```
+
 
 ## Run Behavior
 
 All *Test Suites* run in parallel with each other. The tests within each suite will run sequentially to force a linear dependency graph on storing and fetching variables in the data store.
 For most optimal performance, you can organize your tests in one of the following ways:
-1. ${test-root}/${api}.yaml - Good for short API calls that all flow into each other.
-2. ${test-root}/${api}/{action}.yaml - Good for separating tests with dependent calls from other tests with no dependencies within the same API scope
+1. `${test-root}/${api}.yaml` - Good for short API calls that all flow into each other.
+2. `${test-root}/${api}/{action}.yaml` - Good for separating tests with dependent calls from other tests with no dependencies within the same API scope
 
 ## Pro-Tips:
 

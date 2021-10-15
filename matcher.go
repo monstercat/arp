@@ -45,6 +45,15 @@ type IntegerMatcher struct {
 	Priority int
 }
 
+type FloatMatcher struct {
+	Value    *float64
+	Pattern  *string
+	Exists   bool
+	ErrorStr string
+	DSName   string
+	Priority int
+}
+
 type BoolMatcher struct {
 	Value    *bool
 	Pattern  *string
@@ -269,6 +278,89 @@ func (m *IntegerMatcher) GetPriority() int {
 }
 
 func (m *IntegerMatcher) SetError(error string) {
+	m.ErrorStr = error
+}
+
+func (m *FloatMatcher) Parse(node map[interface{}]interface{}) error {
+	if v, ok := node["matches"]; ok {
+		switch val := v.(type) {
+		case float64:
+			m.Value = &val
+		case int:
+			floatVal := float64(val)
+			m.Value = &floatVal
+		case string:
+			m.Pattern = &val
+		}
+	}
+	m.DSName = getDataStoreName(node)
+	m.Priority = getMatcherPriority(node)
+
+	var err error
+	m.Exists, err = getExistsFlag(node)
+	return err
+}
+
+func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, error, DataStore) {
+	store := DataStore{}
+	m.ErrorStr = ""
+	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
+		m.ErrorStr = message
+		return status, nil, store
+	}
+
+	var status bool
+	var err error
+
+	typedResponseValue, ok := responseValue.(float64)
+	if !ok {
+		return false, nil, nil
+	}
+
+	if m.Value != nil {
+		status = *m.Value == typedResponseValue
+		if !status {
+			m.ErrorStr = fmt.Sprintf(ValueErrFmt, *m.Value, typedResponseValue)
+		}
+	} else if m.Pattern != nil {
+		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
+		if err != nil {
+			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+		}
+		resolvedStr := varToString(resolved, *m.Pattern)
+
+		if resolvedStr == Any {
+			status = true
+		} else {
+			status, err = matchPattern(resolvedStr,
+				[]byte(strconv.FormatFloat(typedResponseValue, 'f', -1, 64)))
+
+			if !status {
+				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolvedStr)
+			}
+		}
+	}
+
+	if status {
+		m.ErrorStr = fmt.Sprintf("%v", typedResponseValue)
+	}
+
+	if status && m.DSName != "" {
+		store[m.DSName] = responseValue
+	}
+
+	return status, err, store
+}
+
+func (m *FloatMatcher) Error() string {
+	return m.ErrorStr
+}
+
+func (m *FloatMatcher) GetPriority() int {
+	return m.Priority
+}
+
+func (m *FloatMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
@@ -568,6 +660,12 @@ func (r *ResponseMatcher) loadField(fieldNode map[interface{}]interface{}, paths
 			return err
 		}
 		foundMatcher = intMatcher
+	case "number":
+		floatMatcher := &FloatMatcher{}
+		if err := floatMatcher.Parse(fieldNode); err != nil {
+			return err
+		}
+		foundMatcher = floatMatcher
 	case "string":
 		strMatcher := &StringMatcher{}
 		if err := strMatcher.Parse(fieldNode); err != nil {
