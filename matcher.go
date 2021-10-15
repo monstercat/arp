@@ -685,9 +685,10 @@ func (r *ResponseMatcher) loadField(fieldNode map[interface{}]interface{}, paths
 		}
 		foundMatcher = arrayMatcher
 	case "object":
-		subObjectNode := fieldNode["properties"].(map[interface{}]interface{})
-		if err := r.loadObjectFields(subObjectNode, paths); err != nil {
-			return err
+		if subObjectNode, ok := fieldNode["properties"].(map[interface{}]interface{}); ok {
+			if err := r.loadObjectFields(subObjectNode, paths); err != nil {
+				return err
+			}
 		}
 	}
 

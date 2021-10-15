@@ -14,6 +14,10 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+const (
+	MissingDSKeyFmt = "Attempted to retrieve data from data store that does not exist: key: %v"
+)
+
 type TestCase struct {
 	ExitOnRun       bool
 	Skip            bool
@@ -94,13 +98,13 @@ func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
 		switch v := node.(type) {
 		case DataStore:
 			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf("Test will fail. Attempted to retrieve data from global store that does not exist: key: %v", variable)
+				return "", fmt.Errorf(MissingDSKeyFmt, variable)
 			} else {
 				node = nextNode
 			}
 		case map[string]interface{}:
 			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf("Test will fail. Attempted to retrieve data from global store that does not exist: key: %v", variable)
+				return "", fmt.Errorf(MissingDSKeyFmt, variable)
 			} else {
 				node = nextNode
 			}

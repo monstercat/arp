@@ -70,29 +70,54 @@ Usage of ./arp:
 Here is a simple test case that can be executed
 
 ```yaml
-# foo_test.yaml
-
-# any file with a 'tests' key at the top most level will be executed
+# sample.yaml
 tests:
-  # you can have multiple tests in the same file
-  - name: List Foos
-    description: Should list all Foos with a Name ending with 'Bar'
+  - name: "List Users"
+    description: "Listing all users"
+    route: "https://reqres.in/api/users"
     method: GET
-    route: 'http://localhost/foo?search=Bar'
-    response: # start of validation definition
+    response:
       code: 200
-      # expecting a payload of {Foo: [{Name: "FooBar"}]}
-      payload: 
-        Foo:
+      payload:
+        page:
+          type: integer
+          matches: $any
+        per_page:
+          type: integer
+          matches: $any
+        total:
+          type: integer
+          matches: $any
+        total_pages:
+          type: integer
+          matches: $any
+        data:
           type: array
-          length: 1
+          length: $notEmpty
           items:
             - type: object
               properties:
-                Name:
+                id:
+                  type: integer
+                  matches: $any
+                email:
                   type: string
-                  matches: .*Bar
+                  matches: $any
+                first_name:
+                  type: string
+                  matches: $any
+                last_name:
+                  type: string
+                  matches: $any
+                avatar:
+                  type: string
+                  matches: https://.*
 ```
+
+Sample output:
+
+![Sample Output](./.github/images/demo.gif)
+
 
 All tests in a directory can be executed with the `-test-root` flag like so:
 
@@ -103,24 +128,8 @@ Individual files can be executed using the `-file` flag:
 ```./arp -file=<path>/foo_test.yaml```
 
 
-Sample output:
-```text
-[Passed] <test-root>/foo_test.yaml
- Passed: 1, Failed: 0, Total:1
---------------------------------------------------------------------------------
- [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
- [GET] http://localhost/foo?search=Bar
-  [*] response.StatusCode: 200
-  [*] .Foo: [length] 1
-  [*] .Foo[0].Name: FooBar
 
---------------------------------------------------------------------------------
-  [Passed] <test-root>
-  1     :Total Tests
-  1     :Passed
-  0     :Failed
---------------------------------------------------------------------------------
-```
+
 
 
 ## Validations
@@ -330,43 +339,57 @@ payload:
 ```
 
 
-For example, if we wanted to store the ID  of FooBar from the sample test to use in a subsequent GET call. Our test would look like:
+For example, if we wanted to store the ID  of the user Charles from the sample test to use in a subsequent GET call. Our test would look like:
 
 ```yaml
-# foo_test.yaml
-tests:
-  - name: List Foos
-    description: Should list all Foos with a Name ending with 'Bar'
+#sample.yaml
+  - name: Get Charles ID
+    description: Get the ID for user charles
+    route:  https://reqres.in/api/users
     method: GET
-    route: 'http://localhost/foo?search=Bar'
     response:
       code: 200
-      # expecting a payload of {Foo: [{Name: "FooBar", Id:"123456789"}]}
       payload:
-        Foo:
+        data:
           type: array
-          length: 1
+          length: $notEmpty
+          sorted: false
           items:
             - type: object
               properties:
-                Name:
+                email:
+                  # set email to a higher priority than ID so this matcher executes first to pick out our array element
+                  priority: 0
                   type: string
-                  matches: .*Bar
-                Id:
-                  type: string
-                  matches: [0-9]+
-                  # ID for FooBar is now available as 'test_id'
-                  storeAs: test_id
-
-  - name: Get FooBar
-    description: Should validate that FooBar has information
+                  # create an anchor here for the email so we don't have to type it out again
+                  matches: &charles_email 'charles.morris@reqres.in'
+                id:
+                  # id matcher is set to a lower priority than email. This matcher is as generic as can be and can pick out the wrong node
+                  # if evaluated first.
+                  priority: 1
+                  type: integer
+                  matches: $any
+                  # store the value in a variable called 'charles_id'
+                  storeAs: charles_id
+  - name: Get Charles Data
+    description: Get the data for user Charles
+    # Fetch the user using the ID we got from the previous test
+    route: https://reqres.in/api/users/@{charles_id}
     method: GET
-    # read back the variable using '@{}' notation
-    route: 'http://localhost/foo/@{test_id}'
-    # response should exists
     response:
       code: 200
+      payload:
+        data:
+          type: object
+          properties:
+            email:
+              type: string
+              # proof that we got the right user
+              matches: *charles_email
 ```
+
+![DFS Store](./.github/images/demo2.gif)
+
 
 ### Fixtures
 
@@ -447,42 +470,8 @@ export HOST_STAGE="Beta"
 
 You can execute a test file in interactive mode by specifying your test file with the `-file` parameter along with `-step`.
 
-```bash
-$ ./arp -file=<path>/foot_test.yaml -fixtures=./fixtures.yaml -step=true -var='host=http://localhost'
-Next test: List Foos - Should list all Foos with a Name ending with 'Bar'
+![Interactive Demo](./.github/images/interactive-demo.gif)
 
-Input options:
- n) Execute next test
- e) Halt further testing and exit program
- f) Exit interactive mode and automatically run remaining tests
- d) Dump all values in data store
- x) Step through tests until next failure
- *) Expand typed variable. e.g. @{host}
-
-Command: @{host}
-@{host} -> http://localhost
-
-Command: n
-
- [Passed]: List Foos - Should list all Foos with a Name ending with 'Bar'
- [GET] http://localhost/foo?search=Bar
-  [*] response.StatusCode: 200
-  [*] .Foo: [length] 1
-  [*] .Foo[0].Name: FooBar
-
-No more tests
-
-Input options:
- n) Execute next test
- r) Retry test
- e) Halt further testing and exit program
- f) Exit interactive mode and automatically run remaining tests
- d) Dump all values in data store
- x) Step through tests until next failure
- *) Expand typed variable. e.g. @{host}
-
-Command:
-```
 
 
 ## Run Behavior

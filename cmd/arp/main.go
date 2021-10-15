@@ -37,7 +37,7 @@ type ProgramArgs struct {
 }
 
 func (p *ProgramArgs) Init() {
-	p.Fixtures = flag.String("fixtures", "./fixtures.yaml", "Path to yaml file with data to include into the test scope via test variables.")
+	p.Fixtures = flag.String("fixtures", "", "Path to yaml file with data to include into the test scope via test variables.")
 	p.TestRoot = flag.String("test-root", "", "File path to scan and execute test files from")
 	p.Threads = flag.Int("threads", 16, "Max number of test files to execute concurrently")
 	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results")
@@ -275,7 +275,7 @@ func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuit
 	}
 
 	printIndentedLn(0, "[%v] %v\n", getSuccessString(c, passed, ""), c.BrightWhite(path))
-	printIndentedLn(0, "%-6[2]d:Total Tests\n%-6[3]d:Passed\n%-6[4]d:Failed\n", 0, globalPassed, globalFailed)
+	printIndentedLn(0, "%-6[2]d:Total Tests\n%-6[3]d:Passed\n%-6[4]d:Failed\n", globalPassed+globalFailed, globalPassed, globalFailed)
 	printIndentedLn(0, "\nTotal Execution Time: %v\n", globalTestDuration)
 	fmt.Printf("%v\n", separator(c))
 
