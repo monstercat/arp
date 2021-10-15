@@ -34,10 +34,12 @@ not much more effort to extend that into a repeatable test case.
 * **Interactive Mode:** You can run test files in an interactive mode allowing you to retry individual tests, evaluate variables, or dump the data in the data store at that point in the test suite's execution
 
 ## Installation
-```
-git clone https://github.com/monstercat/arp.git
-cd arp
-go build ./cmd/arp
+```shell
+export GO111MODULE=on 
+
+git clone https://github.com/monstercat/arp.git && \
+  cd arp && \
+  go install ./cmd/arp
 ```
 
 ## Usage
