@@ -302,7 +302,7 @@ func runTests(args ProgramArgs) bool {
 	if *args.TestFile != "" {
 		suite, err := NewTestSuite(*args.TestFile, *args.Fixtures)
 		if err != nil {
-			fmt.Printf("Failed to initialize test file: %v\n", err)
+			fmt.Printf("%v\n", err)
 			return false
 		}
 		populateDataStore(&suite.GlobalDataStore, args.Variables)
@@ -317,7 +317,7 @@ func runTests(args ProgramArgs) bool {
 	} else if *args.TestRoot != "" {
 		multiTestSuite, err := NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)
 		if err != nil {
-			fmt.Printf("Failed to load tests: %v\n", err)
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 

@@ -1,14 +1,17 @@
 package apivalidator
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v2"
 )
 
-var (
+const (
 	Any      = "$any"
 	NotEmpty = "$notEmpty"
 	LT       = "$<"
@@ -17,20 +20,45 @@ var (
 	GTE      = "$>="
 	EQ       = "$="
 
-	ValueErrFmt        = "Expected value '%v' did not match the actual value '%v'"
-	PatternErrFmt      = "Failed to match actual value '%v' with expected pattern: '%v'"
-	NotEmptyErrFmt     = "Expected non-empty value, but got value '%v' instead."
-	ArrayLengthErrFmt  = "Expected array with length %v %v but found length %v instead."
-	RecievedNullErrFmt = "Received null value when non-null value was expected"
-	ExpectedNullErrFmt = "Expected null value when non-null value was returned"
+	ValueErrFmt            = "Expected value '%v' did not match the actual value '%v'"
+	PatternErrFmt          = "Failed to match actual value '%v' with expected pattern: '%v'"
+	NotEmptyErrFmt         = "Expected non-empty value, but got value '%v' instead."
+	ArrayLengthErrFmt      = "Expected array with length %v %v but found length %v instead."
+	ReceivedNullErrFmt     = "Received null value when non-null value was expected"
+	ExpectedNullErrFmt     = "Expected null value when non-null value was returned"
+	MalformedDefinitionFmt = "\nMalformed '%v' field detected on %v"
+	BadVarMatcherFmt       = "Failed to resolve variable within matcher: %v"
+	BadArrayElementFmt     = "\nExpected elements on '%v' to be objects"
+	BadObjectFmt           = "\nExpected property '%v' to map to an object"
+
+	TYPE_INT   = "integer"
+	TYPE_NUM   = "number"
+	TYPE_STR   = "string"
+	TYPE_ARRAY = "array"
+	TYPE_OBJ   = "object"
+	TYPE_BOOL  = "bool"
 )
+
+func PrintYamlObj(object interface{}) (string, error) {
+	bytes, err := yaml.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}
+
+func ObjectPrintf(message string, obj interface{}) string {
+	objStr, _ := PrintYamlObj(obj)
+	return fmt.Sprintf("%v:\n---\n%v---\n", message, objStr)
+}
 
 type GenericMap map[interface{}]interface{}
 type DataStore map[string]interface{}
 
 type FieldMatcher interface {
 	GetPriority() int
-	Parse(node map[interface{}]interface{}) error
+	Parse(parentNode interface{}, node map[interface{}]interface{}) error
 	Match(field interface{}, datastore *DataStore) (bool, error, DataStore)
 	Error() string
 	SetError(error string)
@@ -187,17 +215,17 @@ func getMatcherPriority(node map[interface{}]interface{}) int {
 
 func handleExistence(node interface{}, exists bool, canBeNull bool) (bool, bool, string) {
 	if node == nil && exists && !canBeNull {
-		return false, false, fmt.Sprintf(RecievedNullErrFmt)
+		return false, false, ReceivedNullErrFmt
 	} else if node == nil && !exists {
 		return true, false, ""
 	} else if node != nil && !exists {
-		return false, false, fmt.Sprintf(ExpectedNullErrFmt)
+		return false, false, ExpectedNullErrFmt
 	}
 	// status, passthrough, message
 	return false, true, ""
 }
 
-func (m *IntegerMatcher) Parse(node map[interface{}]interface{}) error {
+func (m *IntegerMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	if v, ok := node["matches"]; ok {
 		switch val := v.(type) {
 		case float64:
@@ -208,6 +236,8 @@ func (m *IntegerMatcher) Parse(node map[interface{}]interface{}) error {
 			m.Value = &intVal
 		case string:
 			m.Pattern = &val
+		default:
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "matches", TYPE_INT), parentNode))
 		}
 	}
 	m.DSName = getDataStoreName(node)
@@ -242,7 +272,7 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 	} else if m.Pattern != nil {
 		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
 		if err != nil {
-			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+			return false, fmt.Errorf(BadVarMatcherFmt, *m.Pattern), store
 		}
 		resolvedStr := varToString(resolved, *m.Pattern)
 
@@ -281,7 +311,7 @@ func (m *IntegerMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
-func (m *FloatMatcher) Parse(node map[interface{}]interface{}) error {
+func (m *FloatMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	if v, ok := node["matches"]; ok {
 		switch val := v.(type) {
 		case float64:
@@ -291,6 +321,8 @@ func (m *FloatMatcher) Parse(node map[interface{}]interface{}) error {
 			m.Value = &floatVal
 		case string:
 			m.Pattern = &val
+		default:
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "matches", TYPE_NUM), parentNode))
 		}
 	}
 	m.DSName = getDataStoreName(node)
@@ -325,7 +357,7 @@ func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	} else if m.Pattern != nil {
 		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
 		if err != nil {
-			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+			return false, fmt.Errorf(BadVarMatcherFmt, *m.Pattern), store
 		}
 		resolvedStr := varToString(resolved, *m.Pattern)
 
@@ -364,13 +396,15 @@ func (m *FloatMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
-func (m *BoolMatcher) Parse(node map[interface{}]interface{}) error {
+func (m *BoolMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	if v, ok := node["matches"]; ok {
 		switch val := v.(type) {
 		case bool:
 			m.Value = &val
 		case string:
 			m.Pattern = &val
+		default:
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "matches", TYPE_BOOL), parentNode))
 		}
 	}
 	m.DSName = getDataStoreName(node)
@@ -405,7 +439,7 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 	} else if m.Pattern != nil {
 		resolved, err := (*datastore).ExpandVariable(*m.Pattern)
 		if err != nil {
-			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Pattern), store
+			return false, fmt.Errorf(BadVarMatcherFmt, *m.Pattern), store
 		}
 		resolvedStr := varToString(resolved, *m.Pattern)
 		if resolvedStr == Any {
@@ -443,11 +477,13 @@ func (m *BoolMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
-func (m *StringMatcher) Parse(node map[interface{}]interface{}) error {
+func (m *StringMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	if v, ok := node["matches"]; ok {
 		switch val := v.(type) {
 		case string:
 			m.Value = &val
+		default:
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "matches", TYPE_STR), parentNode))
 		}
 	}
 
@@ -477,7 +513,7 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 	if m.Value != nil {
 		resolved, err := (*datastore).ExpandVariable(*m.Value)
 		if err != nil {
-			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.Value), store
+			return false, fmt.Errorf(BadVarMatcherFmt, *m.Value), store
 		}
 		resolvedStr := varToString(resolved, *m.Value)
 
@@ -518,7 +554,7 @@ func (m *StringMatcher) SetError(error string) {
 	m.ErrorStr = fmt.Sprintf("%v (matching '%v')", error, *m.Value)
 }
 
-func (m *ArrayMatcher) Parse(node map[interface{}]interface{}) error {
+func (m *ArrayMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	var err error
 	m.Exists, err = getExistsFlag(node)
 	if err != nil {
@@ -535,11 +571,15 @@ func (m *ArrayMatcher) Parse(node map[interface{}]interface{}) error {
 			m.Length = &intVal
 		case string:
 			m.LengthStr = &val
+		default:
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "length", TYPE_ARRAY), parentNode))
 		}
 	}
 
 	if v, ok := node["items"]; ok && m.Exists {
-		m.Items = v.([]interface{})
+		if m.Items, ok = v.([]interface{}); !ok {
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "items", TYPE_ARRAY), parentNode))
+		}
 	}
 
 	if v, ok := node["sorted"]; ok {
@@ -583,7 +623,7 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	} else if m.LengthStr != nil {
 		resolved, err := (*datastore).ExpandVariable(*m.LengthStr)
 		if err != nil {
-			return false, fmt.Errorf("Failed to resolve variable within matcher: %v", *m.LengthStr), store
+			return false, fmt.Errorf(BadVarMatcherFmt, *m.LengthStr), store
 		}
 		s := varToString(resolved, *m.LengthStr)
 
@@ -641,55 +681,59 @@ func (m *ArrayMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
-func (r *ResponseMatcher) loadField(fieldNode map[interface{}]interface{}, paths FieldMatcherPath) error {
+func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interface{}]interface{}, paths FieldMatcherPath) error {
 	typeField, ok := fieldNode["type"]
 	if !ok {
-		return fmt.Errorf("Failed to parse response validation. No type field provided: %v", paths.Keys)
+		return fmt.Errorf(ObjectPrintf("Failed to parse response validation. Missing field 'type'", parentNode))
 	}
 
 	typeStr, ok := typeField.(string)
 	if !ok {
-		return fmt.Errorf("Failed to parse response validation. Type must be a string: %v", paths.Keys)
+		return fmt.Errorf(ObjectPrintf("Failed to parse response validation. Field 'type' must be a string", parentNode))
 	}
 
 	var foundMatcher FieldMatcher
 	switch typeStr {
-	case "integer":
+	case TYPE_INT:
 		intMatcher := &IntegerMatcher{}
-		if err := intMatcher.Parse(fieldNode); err != nil {
+		if err := intMatcher.Parse(parentNode, fieldNode); err != nil {
 			return err
 		}
 		foundMatcher = intMatcher
-	case "number":
+	case TYPE_NUM:
 		floatMatcher := &FloatMatcher{}
-		if err := floatMatcher.Parse(fieldNode); err != nil {
+		if err := floatMatcher.Parse(parentNode, fieldNode); err != nil {
 			return err
 		}
 		foundMatcher = floatMatcher
-	case "string":
+	case TYPE_STR:
 		strMatcher := &StringMatcher{}
-		if err := strMatcher.Parse(fieldNode); err != nil {
+		if err := strMatcher.Parse(parentNode, fieldNode); err != nil {
 			return err
 		}
 		foundMatcher = strMatcher
-	case "bool":
+	case TYPE_BOOL:
 		boolMatcher := &BoolMatcher{}
-		if err := boolMatcher.Parse(fieldNode); err != nil {
+		if err := boolMatcher.Parse(parentNode, fieldNode); err != nil {
 			return err
 		}
 		foundMatcher = boolMatcher
-	case "array":
+	case TYPE_ARRAY:
 		arrayMatcher := &ArrayMatcher{}
-		if err := arrayMatcher.Parse(fieldNode); err != nil {
+		if err := arrayMatcher.Parse(parentNode, fieldNode); err != nil {
 			return err
 		}
 		foundMatcher = arrayMatcher
-	case "object":
+	case TYPE_OBJ:
 		if subObjectNode, ok := fieldNode["properties"].(map[interface{}]interface{}); ok {
-			if err := r.loadObjectFields(subObjectNode, paths); err != nil {
+			if err := r.loadObjectFields(subObjectNode, subObjectNode, paths); err != nil {
 				return err
 			}
+		} else {
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "properties", TYPE_OBJ), parentNode))
 		}
+	default:
+		return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, "type", "definition"), parentNode))
 	}
 
 	if foundMatcher != nil {
@@ -702,7 +746,7 @@ func (r *ResponseMatcher) loadField(fieldNode map[interface{}]interface{}, paths
 		// visit array elements AFTER we have added the array to the config
 		switch val := foundMatcher.(type) {
 		case *ArrayMatcher:
-			if err := r.loadArrayFields(val, val.Items, paths); err != nil {
+			if err := r.loadArrayFields(val, parentNode, val.Items, paths); err != nil {
 				return err
 			}
 		}
@@ -711,9 +755,12 @@ func (r *ResponseMatcher) loadField(fieldNode map[interface{}]interface{}, paths
 	return nil
 }
 
-func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, fields []interface{}, paths FieldMatcherPath) error {
+func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, parentNode interface{}, fields []interface{}, paths FieldMatcherPath) error {
 	for i, arrayNode := range fields {
-		fieldNode := arrayNode.(map[interface{}]interface{})
+		fieldNode, ok := arrayNode.(map[interface{}]interface{})
+		if !ok {
+			return errors.New(ObjectPrintf(fmt.Sprintf(BadArrayElementFmt, "items"), parentNode))
+		}
 		var pathStack []FieldPathKey
 		pathStack = append(pathStack, paths.Keys...)
 		pathStack = append(pathStack, FieldPathKey{
@@ -727,16 +774,19 @@ func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, fields []interface{},
 			Sorted:         m.Sorted,
 		}
 
-		if err := r.loadField(fieldNode, newPaths); err != nil {
+		if err := r.loadField(parentNode, fieldNode, newPaths); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *ResponseMatcher) loadObjectFields(fields map[interface{}]interface{}, paths FieldMatcherPath) error {
+func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[interface{}]interface{}, paths FieldMatcherPath) error {
 	for k := range fields {
-		fieldNode := fields[k].(map[interface{}]interface{})
+		fieldNode, ok := fields[k].(map[interface{}]interface{})
+		if !ok {
+			return errors.New(ObjectPrintf(fmt.Sprintf(BadObjectFmt, k), parentNode))
+		}
 
 		var pathStack []FieldPathKey
 		pathStack = append(pathStack, paths.Keys...)
@@ -750,7 +800,7 @@ func (r *ResponseMatcher) loadObjectFields(fields map[interface{}]interface{}, p
 			IsArrayElement: paths.IsArrayElement,
 			Sorted:         paths.Sorted,
 		}
-		if err := r.loadField(fieldNode, newPaths); err != nil {
+		if err := r.loadField(parentNode, fieldNode, newPaths); err != nil {
 			return err
 		}
 	}

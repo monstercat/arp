@@ -338,8 +338,7 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 	}
 
 	if payload, ok := responseJson["payload"]; ok {
-
-		return t.ResponseMatcher.loadObjectFields(payload.(map[interface{}]interface{}), FieldMatcherPath{})
+		return t.ResponseMatcher.loadObjectFields(payload, payload.(map[interface{}]interface{}), FieldMatcherPath{})
 	}
 
 	return nil
