@@ -206,7 +206,13 @@ func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
 			a := test.Fields[i].ObjectKeyPath
 			b := test.Fields[j].ObjectKeyPath
 
-			return a[0] != b[0] || a < b
+			if a[0] == b[0] || (a[0] != '.' && b[0] != '.') {
+				return a < b
+			} else if a[0] != '.' {
+				return true
+			} else {
+				return false
+			}
 		})
 		for _, f := range test.Fields {
 			fieldStr := f.ObjectKeyPath
