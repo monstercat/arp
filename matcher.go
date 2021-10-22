@@ -1,4 +1,4 @@
-package apivalidator
+package arp
 
 import (
 	"errors"
@@ -162,17 +162,17 @@ type ResponseMatcher struct {
 	Config []*FieldMatcherConfig
 }
 
-func (r *ResponseMatcher) SortConfigs() {
-	// Sort configs by key length (parent objects get evaluated first) AND
-	// by priority ordering of the matchers within that key length
-	configs := r.Config[:]
-	sort.Slice(configs, func(i, j int) bool {
-		a := configs[i]
-		b := configs[j]
-		return len(a.ObjectKeyPath.Keys) <= len(b.ObjectKeyPath.Keys) &&
-			a.Matcher.GetPriority() <= b.Matcher.GetPriority()
-	})
-	r.Config = configs
+type DepthMatchResponse struct {
+	Status         bool
+	Node           interface{}
+	NodePath       string
+	MatchedNodeKey bool
+	ParentNode     interface{}
+}
+
+type NodeCacheObj struct {
+	Node      interface{}
+	PathIndex int
 }
 
 func matchPattern(pattern string, field []byte) (bool, error) {
@@ -289,7 +289,7 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 	}
 
 	if status {
-		m.ErrorStr = fmt.Sprintf("%v", typedResponseValue)
+		m.ErrorStr = fmt.Sprintf("%d", int64(typedResponseValue))
 	}
 
 	if status && m.DSName != "" {
@@ -807,14 +807,6 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 	return nil
 }
 
-type DepthMatchResponse struct {
-	Status         bool
-	Node           interface{}
-	NodePath       string
-	MatchedNodeKey bool
-	ParentNode     interface{}
-}
-
 func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConfig, path string, key string) DepthMatchResponse {
 	status, _, _ := matcher.Matcher.Match(node, r.DS)
 	if status {
@@ -878,15 +870,47 @@ func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConf
 	}
 }
 
-type NodeCacheObj struct {
-	Node      interface{}
-	PathIndex int
+func (r *ResponseMatcher) SortConfigs() {
+	// Sort configs by key length (parent objects get evaluated first) AND
+	// by priority ordering of the matchers within that key length
+	configs := r.Config[:]
+	sort.Slice(configs, func(i, j int) bool {
+		a := configs[i]
+		b := configs[j]
+		return len(a.ObjectKeyPath.Keys) <= len(b.ObjectKeyPath.Keys) &&
+			a.Matcher.GetPriority() <= b.Matcher.GetPriority()
+	})
+	r.Config = configs
+}
+
+func (r *ResponseMatcher) validateEmpty(response interface{}) (isValid bool) {
+	// if no validation is provided on the response, ignore it even if we get a response from the API
+	// To validate non-existence, the "exists" flag should be used on the validation definition
+	if len(r.Config) == 0 {
+		return true
+	}
+
+	if response == nil {
+		return false
+	}
+
+	// Look for non-empty responses. We can partially validate a response so we don't want to
+	// do a straight up len(r.Config) = len(response)
+	if obj, ok := response.(map[string]interface{}); ok {
+		return len(obj) > 0
+	}
+
+	if ary, ok := response.([]interface{}); ok {
+		return len(ary) > 0
+	}
+
+	return false
 }
 
 // Match Validates our test pattern against the actual JSON response
-func (r *ResponseMatcher) Match(response map[string]interface{}) (bool, error, []*FieldMatcherResult) {
+func (r *ResponseMatcher) Match(response interface{}) (bool, error, []*FieldMatcherResult) {
 	// if we are expecting a payload and get non, throw an error
-	if len(r.Config) > 0 && len(response) == 0 {
+	if !r.validateEmpty(response) {
 		return false, nil, []*FieldMatcherResult{
 			{
 				ObjectKeyPath: "response",

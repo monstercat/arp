@@ -294,7 +294,72 @@ payload:
         exists: false
 ```
 
+### Response Headers
+ You can define validations for response headers by defining your validators on the `headers` object of the `response` section in the test. All headers follow the format of `Map[header key] -> []string`
 
+```yaml
+tests:
+  - name: Get Charles ID
+    description: Get the ID for user charles
+    route:  https://reqres.in/api/users
+    method: GET
+    response:
+      code: 200
+      # ----------------------------------------------------------------
+      # Make sure we're getting the right content type in our response
+      headers:
+        Content-Type:
+          type: array
+          length: $notEmpty
+          items:
+            - type: string
+              matches: "application/json"
+      # ----------------------------------------------------------------
+      payload:
+        data:
+          type: array
+          length: $notEmpty
+          sorted: false
+          items:
+            - type: object
+              properties:
+                email:
+                  priority: 0
+                  type: string
+                  matches: &charles_email 'charles.morris@reqres.in'
+                id:
+                  priority: 1
+                  type: integer
+                  matches: $any
+                  storeAs: charles_id    
+```
+
+### Download URLS
+
+You can write tests to validate URLS that serve binary data. This is done by specifying `file:true` in the `response` section in the test. An md5 sum of the file and the size in bytes are file features that currently can be validated.
+
+```yaml
+tests:
+  - name: Test Download
+    description: Make sure we download the expected file
+    route: https://www.dundeecity.gov.uk/sites/default/files/publications/civic_renewal_forms.zip
+    method: GET
+    response:
+      code: 200
+      # set this to true so the binary payload can be formatted correctly for easy validation
+      file: true
+      
+      payload:
+        # We can validate the size in bytes if it is known ahead of time
+        size:
+          type: integer
+          matches: $any
+        # and/or we can validate the md5 sum of the data
+        hash:
+          type: string
+          matches: $any
+
+```
 
 
 ## Data Storage

@@ -1,7 +1,9 @@
-package apivalidator
+package arp
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,20 +18,25 @@ import (
 
 const (
 	MissingDSKeyFmt = "Attempted to retrieve data from data store that does not exist: key: %v"
+
+	StatusCodePath = "response.StatusCode"
+	HeadersPath    = "response.Header"
 )
 
 type TestCase struct {
-	ExitOnRun       bool
-	Skip            bool
-	Name            string
-	Description     string
-	Method          string
-	Route           string
-	StatusCode      int
-	Input           map[interface{}]interface{}
-	Headers         map[interface{}]interface{}
-	ResponseMatcher ResponseMatcher
-	GlobalDataStore *DataStore
+	BinaryResponse        bool
+	ExitOnRun             bool
+	Skip                  bool
+	Name                  string
+	Description           string
+	Method                string
+	Route                 string
+	StatusCode            int
+	Input                 map[interface{}]interface{}
+	Headers               map[interface{}]interface{}
+	ResponseMatcher       ResponseMatcher
+	ResponseHeaderMatcher ResponseMatcher
+	GlobalDataStore       *DataStore
 }
 
 type TestHook func(test *TestCase)
@@ -45,14 +52,15 @@ type TestSuite struct {
 }
 
 type TestResult struct {
-	TestCase      TestCase
-	Fields        []*FieldMatcherResult
-	Passed        bool
-	Response      map[string]interface{}
-	ResolvedRoute string
-	StatusCode    int
-	StartTime     time.Time
-	EndTime       time.Time
+	TestCase        TestCase
+	Fields          []*FieldMatcherResult
+	Passed          bool
+	Response        map[string]interface{}
+	ResponseHeaders map[string]interface{}
+	ResolvedRoute   string
+	StatusCode      int
+	StartTime       time.Time
+	EndTime         time.Time
 }
 
 type SuiteResult struct {
@@ -288,6 +296,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 
 func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 	t.ResponseMatcher.DS = t.GlobalDataStore
+	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
 	if name, ok := json["name"]; ok {
 		t.Name = name.(string)
 	}
@@ -337,8 +346,22 @@ func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
 		t.StatusCode = 200
 	}
 
+	if isFileResponse, fOk := responseJson["file"]; fOk {
+		t.BinaryResponse = isFileResponse.(bool)
+	}
+
 	if payload, ok := responseJson["payload"]; ok {
-		return t.ResponseMatcher.loadObjectFields(payload, payload.(map[interface{}]interface{}), FieldMatcherPath{})
+		if err := t.ResponseMatcher.
+			loadObjectFields(payload, payload.(map[interface{}]interface{}), FieldMatcherPath{}); err != nil {
+			return err
+		}
+	}
+
+	if respHeaders, ok := responseJson["headers"]; ok {
+		if err := t.ResponseHeaderMatcher.
+			loadObjectFields(respHeaders, respHeaders.(map[interface{}]interface{}), FieldMatcherPath{}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -376,9 +399,12 @@ func (t *TestCase) GetTestHeaders() (interface{}, error) {
 	return node, nil
 }
 
-func (t *TestCase) Validate(statusCode int, response map[string]interface{}) (bool, error, []*FieldMatcherResult) {
+func (t *TestCase) Validate(statusCode int, response map[string]interface{}, headers map[string]interface{}) (bool, error, []*FieldMatcherResult) {
+	var newResults = []*FieldMatcherResult{}
+
+	// Validate status code
 	statusCodeResult := &FieldMatcherResult{
-		ObjectKeyPath: "response.StatusCode",
+		ObjectKeyPath: StatusCodePath,
 		Status:        true,
 	}
 	if t.StatusCode != statusCode {
@@ -388,24 +414,31 @@ func (t *TestCase) Validate(statusCode int, response map[string]interface{}) (bo
 	} else {
 		statusCodeResult.Error = fmt.Sprintf("%v", t.StatusCode)
 	}
+	newResults = append(newResults, statusCodeResult)
 
+	// Validate Response Data
 	status, err, results := t.ResponseMatcher.Match(response)
 	if err != nil {
 		return false, err, results
 	}
+	newResults = append(newResults, results...)
 
-	if status && statusCodeResult.Status {
+	// Validate response headers
+	headerStatus, headerErr, headerResults := t.ResponseHeaderMatcher.Match(headers)
+	if headerErr != nil {
+		return false, headerErr, headerResults
+	}
+	for _, hR := range headerResults {
+		hR.ObjectKeyPath = HeadersPath + hR.ObjectKeyPath
+		newResults = append(newResults, hR)
+	}
+	// Wrap things up
+	if status && headerStatus && statusCodeResult.Status {
 		for k := range *t.ResponseMatcher.DS {
 			(*t.GlobalDataStore)[k] = (*t.ResponseMatcher.DS)[k]
 		}
 	}
-
-	// order the results so the status code is always first
-	var newResults = []*FieldMatcherResult{}
-	newResults = append(newResults, statusCodeResult)
-	newResults = append(newResults, results...)
-
-	return status && statusCodeResult.Status, err, newResults
+	return status && headerStatus && statusCodeResult.Status, nil, newResults
 }
 
 func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
@@ -579,22 +612,40 @@ func (t *TestSuite) ExecuteTest(test *TestCase) (passed bool, err error, result 
 	}
 	result.StatusCode = response.StatusCode
 
+	// convert response headers to json for validation
+	var responseHeaders map[string]interface{}
+	headerData, _ := json.Marshal(&response.Header)
+	if err := json.Unmarshal(headerData, &responseHeaders); err != nil {
+		return false, fmt.Errorf("Failed to convert response headers: %v\n%v", err, response.Header), result
+	}
+	result.ResponseHeaders = responseHeaders
+
+	// convert response body to json for validation
 	responseData, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return false, fmt.Errorf("Failed to fetch API response: %v", err), result
 	}
 
 	var responseJson map[string]interface{}
-	if len(responseData) > 0 {
-
+	if test.BinaryResponse == false && len(responseData) > 0 {
 		err = json.Unmarshal(responseData, &responseJson)
 		if err != nil {
 			return false, fmt.Errorf("Failed to unmarshal API response: %v\n%v", err, responseData), result
 		}
+	} else if test.BinaryResponse {
+		// if we're expecting a binary response, generate a json representation of the data to use with our
+		// validation logic
+		hasher := md5.New()
+		hasher.Write(responseData)
+		fileHash := string(hex.EncodeToString(hasher.Sum(nil)))
 
+		responseJson = make(map[string]interface{})
+		responseJson["size"] = float64(len(responseData))
+		responseJson["hash"] = fileHash
 	}
+
 	result.Response = responseJson
-	result.Passed, err, result.Fields = test.Validate(response.StatusCode, responseJson)
+	result.Passed, err, result.Fields = test.Validate(response.StatusCode, responseJson, responseHeaders)
 	if t.AfterEachTest != nil {
 		t.AfterEachTest(test, response, result.Passed, result.Fields)
 	}

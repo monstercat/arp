@@ -234,6 +234,12 @@ func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
 		printIndentedLn(2, "Route: %v\n", test.ResolvedRoute)
 		printIndentedLn(2, "Status Code: %v\n", test.StatusCode)
 
+		if len(test.TestCase.ResponseHeaderMatcher.Config) > 0 {
+			// only print headers long output if the test case is validating any of them
+			headerJson, _ := json.MarshalIndent(test.ResponseHeaders, indentStr(2), " ")
+			printIndentedLn(2, "Response Headers: %v\n", string(headerJson))
+		}
+
 		input := YamlToJson(test.TestCase.Input)
 		inputJson, _ := json.MarshalIndent(input, indentStr(2), " ")
 		printIndentedLn(2, "Input: %v\n", string(inputJson))
