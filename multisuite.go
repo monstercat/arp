@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type MultiTestSuite struct {
-	Suites map[string]*TestSuite
+	Suites  map[string]*TestSuite
+	Verbose bool
 }
 
 type MultiSuiteResult struct {
@@ -21,7 +23,8 @@ type MultiSuiteResult struct {
 
 func NewMultiSuiteTest(testDir string, fixtures string) (*MultiTestSuite, error) {
 	multiSuite := &MultiTestSuite{
-		Suites: map[string]*TestSuite{},
+		Suites:  map[string]*TestSuite{},
+		Verbose: true,
 	}
 	err := multiSuite.LoadTests(testDir, fixtures)
 	return multiSuite, err
@@ -47,8 +50,12 @@ func (t *MultiTestSuite) LoadTests(testDir string, fixtures string) error {
 	return err
 }
 
-func (t *MultiTestSuite) ExecuteTests(threads int) (bool, error, []MultiSuiteResult) {
-	fmt.Printf("Executing tests across %v threads...\n", threads)
+func (t *MultiTestSuite) ExecuteTests(threads int, testTags []string) (bool, []MultiSuiteResult, time.Duration, error) {
+	if t.Verbose {
+		fmt.Printf("Executing tests across %v threads...\n\n", threads)
+	}
+	startTime := time.Now()
+
 	var results []MultiSuiteResult
 	aggregateStatus := true
 
@@ -62,8 +69,10 @@ func (t *MultiTestSuite) ExecuteTests(threads int) (bool, error, []MultiSuiteRes
 		go func(file string) {
 			defer wg.Done()
 
-			fmt.Printf("Executing tests: %v...\n", file)
-			status, err, result := suite.ExecuteTests()
+			if t.Verbose {
+				fmt.Printf("> In Progress: %v\n", file)
+			}
+			status, result, err := suite.ExecuteTests(testTags)
 			r := MultiSuiteResult{
 				Passed:      status,
 				Error:       err,
@@ -80,7 +89,16 @@ func (t *MultiTestSuite) ExecuteTests(threads int) (bool, error, []MultiSuiteRes
 		d := <-channels
 		results = append(results, d)
 		aggregateStatus = aggregateStatus && d.Passed
-	}
 
-	return aggregateStatus, nil, results
+		if t.Verbose {
+			statusStr := "Pass"
+			if !d.Passed {
+				statusStr = "Fail"
+			}
+
+			fmt.Printf("< Done: [%v] %v\n", statusStr, d.TestFile)
+		}
+	}
+	duration := time.Since(startTime)
+	return aggregateStatus, results, duration, nil
 }

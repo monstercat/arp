@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -23,33 +22,54 @@ func (v *varFlags) Set(value string) error {
 	return nil
 }
 
+type testTags []string
+
+func (t *testTags) String() string {
+	return strings.Join(*t, ",")
+}
+
+func (t *testTags) Set(value string) error {
+	*t = append(*t, strings.TrimSpace((value)))
+	return nil
+}
+
 type ProgramArgs struct {
-	Fixtures    *string
-	TestRoot    *string
-	TestFile    *string
-	Threads     *int
-	Short       *bool
-	Tiny        *bool
-	ShortErrors *bool
-	Colorize    *bool
-	Interactive *bool
-	Variables   varFlags
+	Fixtures     *string
+	TestRoot     *string
+	TestFile     *string
+	Threads      *int
+	Short        *bool
+	Tiny         *bool
+	ShortErrors  *bool
+	ErrorsOnly   *bool
+	PrintHeaders *bool
+	Colorize     *bool
+	Interactive  *bool
+	Variables    varFlags
+	Tags         testTags
 }
 
 func (p *ProgramArgs) Init() {
+	// somewhat alphabetical order...
+	p.PrintHeaders = flag.Bool("always-headers", false, "Always print the request and response headers in long test report output whether any matchers are defined for them or not.")
+	p.Colorize = flag.Bool("colors", true, "Print test report with colors.")
+	p.ErrorsOnly = flag.Bool("error-report", false, "Generate a test report that only contain failing test results.")
+	p.TestFile = flag.String("file", "", "Path to an individual test file to execute.")
 	p.Fixtures = flag.String("fixtures", "", "Path to yaml file with data to include into the test scope via test variables.")
-	p.TestRoot = flag.String("test-root", "", "File path to scan and execute test files from")
-	p.Threads = flag.Int("threads", 16, "Max number of test files to execute concurrently")
-	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results")
-	p.Tiny = flag.Bool("tiny", false, "Print an even tinier report output than what the short flag provides. "+
-		"Only prints test status, name, and description. Failed tests will still be expanded")
-	p.ShortErrors = flag.Bool("short-fail", false, "Keep the report short when errors are encountered rather than expanding with details")
-	p.Colorize = flag.Bool("colors", true, "Print test report with colors")
-	p.TestFile = flag.String("file", "", "Single file path to a test suite to execute.")
-	p.Interactive = flag.Bool("step", false, "Execute a single test file in interactive mode. "+
-		"Requires a test file to be provided with '-file'")
+	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results.")
+	p.ShortErrors = flag.Bool("short-fail", false, "Keep the report short when errors are encountered rather than expanding with details.")
+	p.Interactive = flag.Bool("step", false, "Run tests in interactive mode. Requires a test file to be provided with '-file'")
 
-	flag.Var(&p.Variables, "var", "Prepopulate the tests data store with a KEY=VALUE pair.")
+	flag.Var(&p.Tags, "tag", "Only execute tests with tags matching this value. Tag input supports comma separated values which will execute "+
+		"tests that contain any on of those values. Subsequent tag parameters will AND with previous tag inputs "+
+		"to determine what tests will be run. Specifying no tag parameters will execute all tests.")
+
+	p.TestRoot = flag.String("test-root", "", "Folder path containing all the test files to execute.")
+	p.Threads = flag.Int("threads", 16, "Max number of test files to execute concurrently.")
+	p.Tiny = flag.Bool("tiny", false, "Print an even tinier report output than what the short flag provides. "+
+		"Only prints test status, name, and description. Failed tests will still be expanded.")
+
+	flag.Var(&p.Variables, "var", "Prepopulate the tests data store with a single KEY=VALUE pair. Multiple -var parameters can be provided for additional key/value pairs.")
 
 	if len(os.Args) <= 1 {
 		flag.Usage()
@@ -61,236 +81,6 @@ func (p *ProgramArgs) Init() {
 		def := 1
 		p.Threads = &def
 	}
-}
-
-type Colorizer struct {
-	Enabled bool
-}
-
-func (c *Colorizer) Underline(input string) string {
-	return c.colorizeStr(input, "\033[4m")
-}
-
-func (c *Colorizer) BrightGrey(input string) string {
-	return c.colorizeStr(input, "\033[37;1m")
-}
-
-func (c *Colorizer) BrightRed(input string) string {
-	return c.colorizeStr(input, "\033[31;1m")
-}
-
-func (c *Colorizer) BrightWhite(input string) string {
-	return c.colorizeStr(input, "\033[37;1m")
-}
-
-func (c *Colorizer) BrightYellow(input string) string {
-	return c.colorizeStr(input, "\033[33;1m")
-}
-
-func (c *Colorizer) BrightCyan(input string) string {
-	return c.colorizeStr(input, "\033[36;1m")
-}
-
-func (c *Colorizer) BrightBlue(input string) string {
-	return c.colorizeStr(input, "\033[34;1m")
-}
-func (c *Colorizer) Cyan(input string) string {
-	return c.colorizeStr(input, "\033[36m")
-}
-
-func (c *Colorizer) Red(input string) string {
-	return c.colorizeStr(input, "\033[31m")
-}
-
-func (c *Colorizer) Green(input string) string {
-	return c.colorizeStr(input, "\033[32m")
-}
-
-func (c *Colorizer) Yellow(input string) string {
-	return c.colorizeStr(input, "\033[33m")
-}
-
-func (c *Colorizer) colorizeStr(input string, color string) string {
-	if !c.Enabled {
-		return input
-	}
-	return fmt.Sprintf("%v%v%v", color, input, "\033[0m")
-}
-
-func indentStr(level int) string {
-	indents := ""
-	for i := 0; i < level; i++ {
-		indents += " "
-	}
-
-	return indents
-}
-
-func printIndentedLn(indentLevel int, format string, args ...interface{}) {
-	indentFmt := "%[1]v"
-
-	for i := 0; i < len(format); i++ {
-		indentFmt += string(format[i])
-		// if we reach a newline character and there are more characters after it, indent
-		// the next line to the same level
-		if format[i] == '\n' && i+1 < len(format) {
-			indentFmt += "%[1]v"
-		}
-	}
-
-	var newArgs []interface{}
-	newArgs = append(newArgs, indentStr(indentLevel))
-	for _, a := range args {
-		newArgs = append(newArgs, a)
-	}
-
-	fmt.Printf(indentFmt, newArgs...)
-}
-
-func separator(c Colorizer) string {
-	sep := ""
-	for i := 0; i < 80; i++ {
-		sep += "-"
-	}
-
-	return c.BrightWhite(sep)
-}
-
-func getSuccessString(c Colorizer, status bool, style string) string {
-	switch style {
-	default:
-		fallthrough
-	case "test":
-		if status {
-			return c.Green("Passed")
-		}
-
-		return c.Red("Failed")
-	case "validation":
-		if status {
-			return c.Green("*")
-		}
-
-		return c.Red("x")
-
-	case "skipped":
-		return c.BrightGrey("Skipped")
-	}
-}
-
-func printSingleTestReport(c Colorizer, args ProgramArgs, test *TestResult) {
-	showErrors := false
-	if !test.Passed {
-		showErrors = !*args.ShortErrors
-	}
-
-	showExtendedReport := !(*args.Short) || showErrors
-	showFieldValidations := showExtendedReport || !*args.Tiny
-
-	details := test.TestCase
-	routeStr := fmt.Sprintf("[%v] %v", c.BrightCyan(details.Method), c.BrightWhite(details.Route))
-	statusStyle := ""
-	if test.TestCase.Skip {
-		statusStyle = "skipped"
-	}
-
-	delta := test.EndTime.Sub(test.StartTime)
-	timeStr := fmt.Sprintf("%v: %v", c.BrightWhite("Test Duration"), delta)
-
-	printIndentedLn(1, "[%v] %v - %v\n", getSuccessString(c, test.Passed, statusStyle),
-		c.BrightWhite(details.Name), details.Description)
-	printIndentedLn(2, "%v\n", timeStr)
-	printIndentedLn(1, "%v\n", routeStr)
-	if showFieldValidations {
-		sort.Slice(test.Fields, func(i, j int) bool {
-			a := test.Fields[i].ObjectKeyPath
-			b := test.Fields[j].ObjectKeyPath
-
-			if a[0] == b[0] || (a[0] != '.' && b[0] != '.') {
-				return a < b
-			} else if a[0] != '.' {
-				return true
-			} else {
-				return false
-			}
-		})
-		for _, f := range test.Fields {
-			fieldStr := f.ObjectKeyPath
-			errStr := f.Error
-			if !f.Status {
-				fieldStr = c.Cyan(fieldStr)
-				errStr = c.BrightYellow(errStr)
-			} else {
-				fieldStr = c.BrightBlue(fieldStr)
-			}
-
-			printIndentedLn(2, "[%v] %v: %v\n", getSuccessString(c, f.Status, "validation"),
-				fieldStr, errStr)
-		}
-	}
-	fmt.Printf("\n")
-
-	if showExtendedReport {
-		printIndentedLn(2, "Route: %v\n", test.ResolvedRoute)
-		printIndentedLn(2, "Status Code: %v\n", test.StatusCode)
-
-		if len(test.TestCase.ResponseHeaderMatcher.Config) > 0 {
-			// only print headers long output if the test case is validating any of them
-			headerJson, _ := json.MarshalIndent(test.ResponseHeaders, indentStr(2), " ")
-			printIndentedLn(2, "Response Headers: %v\n", string(headerJson))
-		}
-
-		input := YamlToJson(test.TestCase.Input)
-		inputJson, _ := json.MarshalIndent(input, indentStr(2), " ")
-		printIndentedLn(2, "Input: %v\n", string(inputJson))
-
-		data, _ := json.MarshalIndent(test.Response, indentStr(2), " ")
-		printIndentedLn(2, "Response: %v\n\n", string(data))
-		fmt.Printf(c.BrightWhite("---\n"))
-	}
-}
-
-func printReport(c Colorizer, args ProgramArgs, passed bool, results []MultiSuiteResult) {
-	globalFailed := 0
-	globalPassed := 0
-	var globalTestDuration time.Duration
-
-	fmt.Printf("\n\n")
-	for _, r := range results {
-		printIndentedLn(0, "[%v] %v\n", getSuccessString(c, r.Passed, ""),
-			c.Underline(c.BrightWhite(r.TestFile)))
-		printIndentedLn(1, "Suite Duration: %v\n", r.TestResults.Duration)
-		printIndentedLn(1, "Passed: %v, Failed: %v, Total:%v\n", r.TestResults.Passed,
-			r.TestResults.Failed, r.TestResults.Total)
-
-		globalFailed += r.TestResults.Failed
-		globalPassed += r.TestResults.Passed
-		globalTestDuration += r.TestResults.Duration
-
-		fmt.Printf("%v\n", separator(c))
-
-		for _, test := range r.TestResults.Results {
-			printSingleTestReport(c, args, test)
-		}
-
-		if r.Error != nil {
-			printIndentedLn(1, c.BrightRed("Some tests failed to execute:\n"))
-			printIndentedLn(1, "%v\n", r.Error)
-		}
-
-	}
-
-	fmt.Printf("%v\n", separator(c))
-	path := *args.TestRoot
-	if path == "" {
-		path = *args.TestFile
-	}
-
-	printIndentedLn(0, "[%v] %v\n", getSuccessString(c, passed, ""), c.BrightWhite(path))
-	printIndentedLn(0, "%-6[2]d:Total Tests\n%-6[3]d:Passed\n%-6[4]d:Failed\n", globalPassed+globalFailed, globalPassed, globalFailed)
-	printIndentedLn(0, "\nTotal Execution Time: %v\n", globalTestDuration)
-	fmt.Printf("%v\n", separator(c))
-
 }
 
 func populateDataStore(ds *DataStore, vars varFlags) {
@@ -310,24 +100,29 @@ func runTests(args ProgramArgs) bool {
 	var passed bool
 	var err error
 	var results []MultiSuiteResult
+	var testingDuration time.Duration
 
 	if *args.TestFile != "" {
-		suite, err := NewTestSuite(*args.TestFile, *args.Fixtures)
-		if err != nil {
-			fmt.Printf("%v\n", err)
+		suite, sErr := NewTestSuite(*args.TestFile, *args.Fixtures)
+		if sErr != nil {
+			fmt.Printf("%v\n", sErr)
 			return false
 		}
+		suite.Verbose = true
 		populateDataStore(&suite.GlobalDataStore, args.Variables)
 
 		r := MultiSuiteResult{
 			TestFile: *args.TestFile,
 		}
-		r.Passed, r.Error, r.TestResults = suite.ExecuteTests()
+		r.Passed, r.TestResults, r.Error = suite.ExecuteTests(args.Tags)
 		results = append(results, r)
 		passed = r.Passed
 		err = r.Error
+		testingDuration = r.TestResults.Duration
+
 	} else if *args.TestRoot != "" {
-		multiTestSuite, err := NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)
+		var multiTestSuite *MultiTestSuite
+		multiTestSuite, err = NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)
 		if err != nil {
 			fmt.Printf("%v\n", err)
 			os.Exit(1)
@@ -337,7 +132,7 @@ func runTests(args ProgramArgs) bool {
 			populateDataStore(&suite.GlobalDataStore, args.Variables)
 		}
 
-		passed, err, results = multiTestSuite.ExecuteTests(*args.Threads)
+		passed, results, testingDuration, err = multiTestSuite.ExecuteTests(*args.Threads, args.Tags)
 	}
 
 	if err != nil {
@@ -350,11 +145,24 @@ func runTests(args ProgramArgs) bool {
 		os.Exit(1)
 	}
 
-	colorizer := Colorizer{
-		Enabled: *args.Colorize,
+	path := *args.TestRoot
+	if path == "" {
+		path = *args.TestFile
 	}
 
-	printReport(colorizer, args, passed, results)
+	opts := ReportOptions{
+		Tiny:               *args.Tiny,
+		ShortErrors:        *args.ShortErrors,
+		Short:              *args.Short,
+		TestsPath:          path,
+		AlwaysPrintHeaders: *args.PrintHeaders,
+		ErrorsOnly:         *args.ErrorsOnly,
+		Colors: Colorizer{
+			Enabled: *args.Colorize,
+		},
+	}
+
+	PrintReport(opts, passed, testingDuration, results)
 	return passed
 }
 
@@ -363,16 +171,23 @@ type StepInput struct {
 	StepThroughToError bool
 	Exit               bool
 	Retry              bool
+	HotReload          bool
 }
 
-func interactivePrompt(showOpts bool, canRetry bool) {
+func interactivePrompt(showOpts bool, canRetry bool, websocketMode bool) {
+	nextMsg := "Execute next test"
+	if websocketMode {
+		nextMsg = "Send next websocket message"
+	}
+
 	options := []string{
-		"n) Execute next test",
+		fmt.Sprintf("n) %s", nextMsg),
 		"r) Retry test",
 		"e) Halt further testing and exit program",
 		"f) Exit interactive mode and automatically run remaining tests",
 		"d) Dump all values in data store",
 		"x) Step through tests until next failure",
+		"q) Hot reload test file",
 		"*) Expand typed variable. e.g. @{host}",
 	}
 
@@ -383,27 +198,29 @@ func interactivePrompt(showOpts bool, canRetry bool) {
 				continue
 			}
 
-			printIndentedLn(1, "%v\n", o)
+			PrintIndentedLn(1, "%v\n", o)
 		}
 	}
 	fmt.Printf("\nCommand: ")
 }
 
-func interactiveInput(tests []TestCase, curTest int, result *TestResult) StepInput {
+func interactiveInput(tests []*TestCase, curTest int, subTest bool, result *TestResult) StepInput {
 	nextTestNo := curTest + 1
-	canRetry := true
+	canRetry := true && !subTest
+	websocketPrompt := tests[curTest].Config.Websocket && subTest
 
 	if result == nil {
 		nextTestNo = curTest
 		canRetry = false
 	}
-
-	if nextTestNo < len(tests) {
-		fmt.Printf("Next test: %v - %v\n", tests[nextTestNo].Name, tests[nextTestNo].Description)
+	if websocketPrompt {
+		fmt.Printf("Next test: Send next websocket request.")
+	} else if nextTestNo < len(tests) {
+		fmt.Printf("Next test: %v - %v\n", tests[nextTestNo].Config.Name, tests[nextTestNo].Config.Description)
 	} else {
 		fmt.Printf("No more tests")
 	}
-	interactivePrompt(true, canRetry)
+	interactivePrompt(true, canRetry, websocketPrompt)
 
 	for {
 		input := ""
@@ -425,17 +242,19 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) StepInp
 				return StepInput{Retry: true}
 			}
 		case "d":
-			pretty, _ := json.MarshalIndent(tests[curTest].GlobalDataStore, "", indentStr(1))
+			pretty, _ := json.MarshalIndent(tests[curTest].GlobalDataStore, "", IndentStr(1))
 			fmt.Printf("%v\n", string(pretty))
 		case "x":
 			return StepInput{FallThrough: true, StepThroughToError: true}
+		case "q":
+			return StepInput{HotReload: true}
 		default:
 			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(input)
 			if err != nil {
 				fmt.Printf("\nFailed to expand variable: %v\n", err)
 			} else {
 				if _, ok := expanded.(string); !ok {
-					data, _ := json.MarshalIndent(expanded, "", indentStr(1))
+					data, _ := json.MarshalIndent(expanded, "", IndentStr(1))
 					expanded = string(data)
 				}
 
@@ -443,13 +262,20 @@ func interactiveInput(tests []TestCase, curTest int, result *TestResult) StepInp
 			}
 		}
 
-		interactivePrompt(false, true)
+		interactivePrompt(false, true, websocketPrompt)
 	}
 }
 
 func interactiveMode(args ProgramArgs) bool {
-	c := Colorizer{
-		Enabled: *args.Colorize,
+	opts := ReportOptions{
+		Tiny:               *args.Tiny,
+		ShortErrors:        *args.ShortErrors,
+		Short:              *args.Short,
+		TestsPath:          *args.TestFile,
+		AlwaysPrintHeaders: *args.PrintHeaders,
+		Colors: Colorizer{
+			Enabled: *args.Colorize,
+		},
 	}
 
 	suite, err := NewTestSuite(*args.TestFile, *args.Fixtures)
@@ -457,37 +283,101 @@ func interactiveMode(args ProgramArgs) bool {
 		fmt.Printf("Failed to initialize test file: %v\n", err)
 		return false
 	}
+	defer suite.Close()
+
 	populateDataStore(&suite.GlobalDataStore, args.Variables)
 
 	allPassed := true
 	var stepInput StepInput
-
 	testNo := 0
-	stepInput = interactiveInput(suite.Tests, 0, nil)
+	stepInput = interactiveInput(suite.Tests, 0, false, nil)
+
+	// Using range will create a slice copy of the tests which won't allow us
+	// to hot reload them.
 	for !stepInput.Exit && testNo < len(suite.Tests) {
 		test := suite.Tests[testNo]
-		passed, err, result := suite.ExecuteTest(&test)
-		allPassed = allPassed && passed
 
-		printSingleTestReport(c, args, result)
-		if err != nil {
-			printIndentedLn(1, c.BrightRed("Some tests failed to execute:\n"))
-			printIndentedLn(1, "%v\n", err)
-			return allPassed
+		var passed bool
+		var result *TestResult
+		var err error
+
+		// If test is a websocket, lets step through each request/response
+		if test.Config.Websocket && !test.Config.Skip && !test.SkipTestOnTags(args.Tags) {
+			totalSteps := 1
+			result = &TestResult{
+				TestCase:  *test,
+				StartTime: time.Now().UTC(),
+			}
+
+			wsStep := 0
+			testName := test.Config.Name
+			finalPassed := true
+			for !stepInput.Exit && !stepInput.HotReload && totalSteps > 0 {
+				var remaining int
+				passed, remaining, err = test.StepExecWebsocket(wsStep, result)
+
+				finalPassed = passed
+				totalSteps = remaining
+				result.TestCase.Config.Name = fmt.Sprintf("%v [%v/%v]", testName, wsStep+1, wsStep+totalSteps+1)
+
+				opts.InProgress = remaining != 0
+
+				if opts.InProgress {
+					PrintSingleTestReport(opts, result)
+					if err != nil {
+						PrintIndentedLn(1, opts.Colors.BrightRed("Some tests failed to execute:\n"))
+						PrintIndentedLn(1, "%v\n", err)
+						return false
+					}
+					if !stepInput.FallThrough {
+						stepInput = interactiveInput(suite.Tests, testNo, remaining != 0, result)
+					}
+					// No retry support for individual websocket messages. Must retry the entire test
+					wsStep += 1
+				}
+			}
+			allPassed = allPassed && finalPassed
+		} else {
+			passed, result, err = test.Execute(args.Tags)
+			allPassed = allPassed && passed
 		}
 
-		if !passed && stepInput.StepThroughToError {
-			stepInput.FallThrough = false
-		}
+		if !stepInput.HotReload && !stepInput.Exit {
+			PrintSingleTestReport(opts, result)
+			if err != nil {
+				PrintIndentedLn(1, opts.Colors.BrightRed("Some tests failed to execute:\n"))
+				PrintIndentedLn(1, "%v\n", err)
+				return allPassed
+			}
 
-		if !stepInput.FallThrough {
-			stepInput = interactiveInput(suite.Tests, testNo, result)
-			if !stepInput.Retry {
+			if !passed && stepInput.StepThroughToError {
+				stepInput.FallThrough = false
+			}
+
+			if !stepInput.FallThrough {
+				stepInput = interactiveInput(suite.Tests, testNo, false, result)
+				if !stepInput.Retry && !stepInput.HotReload {
+					testNo += 1
+				}
+				fmt.Print("\033[H\033[2J")
+			} else {
 				testNo += 1
 			}
+		} else if stepInput.HotReload {
+			loaded := false
+
+			for !loaded {
+				loaded, err = suite.ReloadFile(*args.TestFile)
+				if err != nil {
+					fmt.Printf("Hot reload error: %v\nPlease correct your file then press 'enter' to reload...\n", err)
+					input := ""
+					fmt.Scanln(&input)
+				}
+			}
+
+			stepInput.HotReload = false
 			fmt.Print("\033[H\033[2J")
-		} else {
-			testNo += 1
+			fmt.Printf("Reloaded test file. Resuming tests from last started test case.\n\n")
 		}
 	}
 

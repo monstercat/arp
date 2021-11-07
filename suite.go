@@ -1,15 +1,9 @@
 package arp
 
 import (
-	"bytes"
-	"crypto/md5"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,44 +17,14 @@ const (
 	HeadersPath    = "response.Header"
 )
 
-type TestCase struct {
-	BinaryResponse        bool
-	ExitOnRun             bool
-	Skip                  bool
-	Name                  string
-	Description           string
-	Method                string
-	Route                 string
-	StatusCode            int
-	Input                 map[interface{}]interface{}
-	Headers               map[interface{}]interface{}
-	ResponseMatcher       ResponseMatcher
-	ResponseHeaderMatcher ResponseMatcher
-	GlobalDataStore       *DataStore
+type TestSuiteCfg struct {
+	Tests []TestCaseCfg `yaml:"tests"`
 }
-
-type TestHook func(test *TestCase)
-type BeforeEachTest func(test *TestCase, request *http.Request)
-type AfterEachTest func(test *TestCase, response *http.Response, status bool, results []*FieldMatcherResult)
 
 type TestSuite struct {
-	Tests           []TestCase
+	Tests           []*TestCase
 	GlobalDataStore DataStore
-	BeforeEachTest  BeforeEachTest
-	AfterEachTest   AfterEachTest
-	Client          http.Client
-}
-
-type TestResult struct {
-	TestCase        TestCase
-	Fields          []*FieldMatcherResult
-	Passed          bool
-	Response        map[string]interface{}
-	ResponseHeaders map[string]interface{}
-	ResolvedRoute   string
-	StatusCode      int
-	StartTime       time.Time
-	EndTime         time.Time
+	Verbose         bool
 }
 
 type SuiteResult struct {
@@ -71,380 +35,9 @@ type SuiteResult struct {
 	Duration time.Duration
 }
 
-func YamlToJson(i interface{}) interface{} {
-	switch x := i.(type) {
-	case map[interface{}]interface{}:
-		m2 := map[string]interface{}{}
-		for k, v := range x {
-			m2[k.(string)] = YamlToJson(v)
-		}
-		return m2
-	case []interface{}:
-		for i, v := range x {
-			x[i] = YamlToJson(v)
-		}
-	}
-	return i
-}
-
-func varToString(variable interface{}, def ...string) string {
-	if variable == nil {
-		if len(def) > 0 {
-			return def[0]
-		} else {
-			return ""
-		}
-	}
-	return fmt.Sprintf("%v", variable)
-}
-
-func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
-	keys := strings.Split(variable, ".")
-	var node interface{}
-	node = *t
-	for _, k := range keys {
-		switch v := node.(type) {
-		case DataStore:
-			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, variable)
-			} else {
-				node = nextNode
-			}
-		case map[string]interface{}:
-			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, variable)
-			} else {
-				node = nextNode
-			}
-		}
-	}
-
-	return node, nil
-}
-
-type VarStackFrame struct {
-	StartPos int
-	EndPos   int
-	VarName  string
-	Nested   int
-}
-
-type VarStack struct {
-	Frames []VarStackFrame
-	Extra  string
-}
-
-func (s *VarStack) Push(f VarStackFrame) {
-	s.Frames = append(s.Frames, f)
-}
-
-func (s *VarStack) Pop() *VarStackFrame {
-	if len(s.Frames) == 0 {
-		return nil
-	}
-	result := s.Frames[len(s.Frames)-1]
-	s.Frames = s.Frames[:len(s.Frames)-1]
-	return &result
-}
-
-func (f *VarStackFrame) IsValid() bool {
-	return f.StartPos != f.EndPos && f.VarName != ""
-}
-
-func parseVar(input string) VarStack {
-	varStack := VarStack{}
-	resultStack := VarStack{}
-	var curStackFrame *VarStackFrame
-	for i := 0; i < len(input); i++ {
-		char := input[i]
-		if char == '@' && i+1 < len(input) && input[i+1] == '{' {
-			nestLevel := 0
-			if curStackFrame != nil {
-				varStack.Push(*curStackFrame)
-				nestLevel = curStackFrame.Nested + 1
-			}
-			curStackFrame = &VarStackFrame{}
-			curStackFrame.StartPos = i
-			curStackFrame.Nested = nestLevel
-		} else if curStackFrame != nil && char == '}' {
-			curStackFrame.EndPos = i
-			curStackFrame.VarName = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
-			resultStack.Push(*curStackFrame)
-			curStackFrame = varStack.Pop()
-		} else if curStackFrame == nil {
-			resultStack.Extra += string(char)
-		}
-	}
-
-	return resultStack
-}
-
-func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
-	var result interface{}
-	var outputString string
-	variables := parseVar(input)
-
-	if len(variables.Frames) == 0 {
-		return input, nil
-	}
-
-	if variables.Extra != "" {
-		outputString = input
-	}
-
-	type ExtendedStackFrame struct {
-		VarStackFrame
-		ResolvedVarName string
-	}
-
-	toResolve := []ExtendedStackFrame{}
-	for _, v := range variables.Frames {
-		toResolve = append(toResolve, ExtendedStackFrame{
-			VarStackFrame:   v,
-			ResolvedVarName: v.VarName,
-		})
-	}
-
-	for i, v := range toResolve {
-		varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
-		resolvedVar, err := t.resolveVariable(varKey)
-		if err != nil {
-			return nil, err
-		}
-
-		if v.Nested == 0 {
-			// if the input contains more text than just the variable, we can assume that it is intended to be replaced
-			// within the string
-			if outputString != "" {
-				outputString = strings.ReplaceAll(outputString, v.VarName, varToString(resolvedVar))
-			} else {
-				// otherwise, just return the node and it'll be converted as needed
-				result = resolvedVar
-			}
-		}
-		// once variable is resolved, we want to expand the other variables that might be composed with it
-		for offset := i + 1; offset < len(toResolve); offset++ {
-			frame := toResolve[offset]
-
-			if !strings.Contains(frame.ResolvedVarName, v.VarName) {
-				continue
-			}
-
-			if _, ok := resolvedVar.(string); !ok {
-				return nil, fmt.Errorf("Failed to resolve %v as %v does not resolve to a string: %v", frame.VarName, v.VarName, resolvedVar)
-			}
-			// Assumes that people's variables are resolving to proper strings. If not, then they'll get a message
-			// indicating their variable couldn't be resolved anyway.
-			frame.ResolvedVarName = strings.ReplaceAll(frame.ResolvedVarName, v.VarName, varToString(resolvedVar))
-			toResolve[offset] = frame
-		}
-
-	}
-	if outputString != "" {
-		result = outputString
-	}
-
-	return result, nil
-}
-
-func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}, error) {
-	if input == nil {
-		return nil, nil
-	}
-
-	switch n := input.(type) {
-	case map[interface{}]interface{}:
-		for k := range n {
-			if node, err := t.resolveDataStoreVarRecursive(n[k]); err != nil {
-				return nil, err
-			} else {
-				n[k] = node
-			}
-
-		}
-		return n, nil
-	case map[string]interface{}:
-		for k := range n {
-			if node, err := t.resolveDataStoreVarRecursive(n[k]); err != nil {
-				return nil, err
-			} else {
-				n[k] = node
-			}
-
-		}
-		return n, nil
-	case []interface{}:
-		for i, e := range n {
-			if node, err := t.resolveDataStoreVarRecursive(e); err != nil {
-				return nil, err
-			} else {
-				n[i] = node
-			}
-		}
-
-		return n, nil
-	case string:
-		res, err := t.ExpandVariable(n)
-		if res == nil {
-			return input, nil
-		}
-		return res, err
-	}
-
-	return input, nil
-}
-
-func (t *TestCase) LoadConfig(json map[interface{}]interface{}) error {
-	t.ResponseMatcher.DS = t.GlobalDataStore
-	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
-	if name, ok := json["name"]; ok {
-		t.Name = name.(string)
-	}
-
-	if desc, ok := json["description"]; ok {
-		t.Description = desc.(string)
-	}
-
-	if method, ok := json["method"]; ok {
-		t.Method = method.(string)
-	}
-
-	if route, ok := json["route"]; ok {
-		t.Route = route.(string)
-	}
-
-	if input, ok := json["input"]; ok {
-		t.Input = input.(map[interface{}]interface{})
-	}
-
-	if headers, ok := json["headers"]; ok {
-		t.Headers = headers.(map[interface{}]interface{})
-	}
-
-	if skip, ok := json["skip"]; ok {
-		t.Skip = skip.(bool)
-	}
-
-	if exit, ok := json["exit"]; ok {
-		t.ExitOnRun = exit.(bool)
-	}
-
-	responseConfig, ok := json["response"]
-	if !ok {
-		return nil
-	}
-
-	responseJson := responseConfig.(map[interface{}]interface{})
-	if statusCode, sOk := responseJson["code"]; sOk {
-		switch c := statusCode.(type) {
-		case float64:
-			t.StatusCode = int(c)
-		case int:
-			t.StatusCode = c
-		}
-	} else {
-		t.StatusCode = 200
-	}
-
-	if isFileResponse, fOk := responseJson["file"]; fOk {
-		t.BinaryResponse = isFileResponse.(bool)
-	}
-
-	if payload, ok := responseJson["payload"]; ok {
-		if err := t.ResponseMatcher.
-			loadObjectFields(payload, payload.(map[interface{}]interface{}), FieldMatcherPath{}); err != nil {
-			return err
-		}
-	}
-
-	if respHeaders, ok := responseJson["headers"]; ok {
-		if err := t.ResponseHeaderMatcher.
-			loadObjectFields(respHeaders, respHeaders.(map[interface{}]interface{}), FieldMatcherPath{}); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (t *TestCase) GetTestRoute() (string, error) {
-	resolvedRoute, err := t.GlobalDataStore.ExpandVariable(t.Route)
-	if err != nil {
-		return "", err
-	}
-	return varToString(resolvedRoute, t.Route), nil
-}
-
-func (t *TestCase) GetTestInput() (io.Reader, error) {
-	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Input)
-	if err != nil {
-		return nil, err
-	}
-
-	jsonNode := YamlToJson(node)
-
-	b, err := json.Marshal(jsonNode)
-	if err != nil {
-		return nil, err
-	}
-	return bytes.NewReader(b), nil
-}
-
-func (t *TestCase) GetTestHeaders() (interface{}, error) {
-	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Headers)
-	if err != nil {
-		return nil, err
-	}
-
-	return node, nil
-}
-
-func (t *TestCase) Validate(statusCode int, response map[string]interface{}, headers map[string]interface{}) (bool, error, []*FieldMatcherResult) {
-	var newResults = []*FieldMatcherResult{}
-
-	// Validate status code
-	statusCodeResult := &FieldMatcherResult{
-		ObjectKeyPath: StatusCodePath,
-		Status:        true,
-	}
-	if t.StatusCode != statusCode {
-		statusCodeResult.Status = false
-		statusCodeResult.Error = fmt.Sprintf("Expected response with status code '%v'. Got '%v' instead.",
-			t.StatusCode, statusCode)
-	} else {
-		statusCodeResult.Error = fmt.Sprintf("%v", t.StatusCode)
-	}
-	newResults = append(newResults, statusCodeResult)
-
-	// Validate Response Data
-	status, err, results := t.ResponseMatcher.Match(response)
-	if err != nil {
-		return false, err, results
-	}
-	newResults = append(newResults, results...)
-
-	// Validate response headers
-	headerStatus, headerErr, headerResults := t.ResponseHeaderMatcher.Match(headers)
-	if headerErr != nil {
-		return false, headerErr, headerResults
-	}
-	for _, hR := range headerResults {
-		hR.ObjectKeyPath = HeadersPath + hR.ObjectKeyPath
-		newResults = append(newResults, hR)
-	}
-	// Wrap things up
-	if status && headerStatus && statusCodeResult.Status {
-		for k := range *t.ResponseMatcher.DS {
-			(*t.GlobalDataStore)[k] = (*t.ResponseMatcher.DS)[k]
-		}
-	}
-	return status && headerStatus && statusCodeResult.Status, nil, newResults
-}
-
 func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	suite := &TestSuite{
 		GlobalDataStore: DataStore{},
-		Client:          http.Client{},
 	}
 
 	err := suite.InitializeDataStore(fixtures)
@@ -457,39 +50,15 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	if !status && err == nil {
 		return nil, nil
 	} else if err != nil {
-		return suite, fmt.Errorf("Failed to initialize test suite: %v", err)
+		return suite, fmt.Errorf("failed to initialize test suite: %v", err)
 	}
 
 	return suite, nil
 }
 
-func (t *TestSuite) LoadFixtures(fixtures string) (map[string]interface{}, error) {
-	var config map[interface{}]interface{}
-
-	if fixtures == "" {
-		return nil, nil
-	}
-
-	fileInfo, err := os.Stat(fixtures)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to stat fixture file: %v - %v", fixtures, err)
-	}
-
-	if fileInfo.IsDir() {
-		return nil, fmt.Errorf("Fixtures must be a file, not a directory: %v - %v", fixtures, err)
-	}
-
-	data, err := os.ReadFile(fixtures)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to read fixtures file: %v - %v", fixtures, err)
-	}
-
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to unmarshal fixture file: %v - %v", fixtures, err)
-	}
-
-	return YamlToJson(config).(map[string]interface{}), nil
+func (t *TestSuite) ReloadFile(testFile string) (bool, error) {
+	t.Tests = make([]*TestCase, 0)
+	return t.LoadTests(testFile)
 }
 
 func (t *TestSuite) InitializeDataStore(fixtures string) error {
@@ -510,150 +79,74 @@ func (t *TestSuite) InitializeDataStore(fixtures string) error {
 	return nil
 }
 
+func (t *TestSuite) LoadFixtures(fixtures string) (map[string]interface{}, error) {
+	var config map[interface{}]interface{}
+
+	if fixtures == "" {
+		return nil, nil
+	}
+
+	fileInfo, err := os.Stat(fixtures)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat fixture file: %v - %v", fixtures, err)
+	}
+
+	if fileInfo.IsDir() {
+		return nil, fmt.Errorf("fixtures must be a file, not a directory: %v - %v", fixtures, err)
+	}
+
+	data, err := os.ReadFile(fixtures)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read fixtures file: %v - %v", fixtures, err)
+	}
+
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal fixture file: %v - %v", fixtures, err)
+	}
+
+	return YamlToJson(config).(map[string]interface{}), nil
+}
+
+func (t *TestSuite) Close() {
+	for _, test := range t.Tests {
+		test.CloseWebsocket()
+	}
+}
+
 func (t *TestSuite) LoadTests(testFile string) (bool, error) {
 	data, err := os.ReadFile(testFile)
 	if err != nil {
-		return false, fmt.Errorf("Failed to load test file: %v - %v", testFile, err)
+		return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
 	}
+	t.GlobalDataStore["TEST_DIR"], _ = filepath.Abs(filepath.Dir(testFile))
 
-	var fileData interface{}
-	err = yaml.Unmarshal(data, &fileData)
+	var testSuiteCfg TestSuiteCfg
 
+	err = yaml.Unmarshal(data, &testSuiteCfg)
 	if err != nil {
-		return false, fmt.Errorf("Failed to load test file: %v - %v", testFile, err)
+		return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
 	}
 
-	mappedData, ok := fileData.(map[interface{}]interface{})
-	if !ok {
-		return false, fmt.Errorf("Incorrectly formatted test config. Top level needs to be an object.")
-	}
-
-	testList, ok := mappedData["tests"]
-	if !ok {
-		return false, nil
-	}
-
-	if tests, ok := testList.([]interface{}); ok {
-		for _, test := range tests {
-			tCase := TestCase{
-				GlobalDataStore: &t.GlobalDataStore,
-			}
-
-			err = tCase.LoadConfig(test.(map[interface{}]interface{}))
-			if err != nil {
-				return false, fmt.Errorf("Failed to load test file: %v - %v", testFile, err)
-			}
-
-			t.Tests = append(t.Tests, tCase)
+	for _, test := range testSuiteCfg.Tests {
+		tCase := TestCase{
+			GlobalDataStore: &t.GlobalDataStore,
 		}
+
+		err = tCase.LoadConfig(&test)
+		if err != nil {
+			return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
+		}
+
+		t.Tests = append(t.Tests, &tCase)
 	}
 
 	return true, nil
 }
 
-func (t *TestSuite) ExecuteTest(test *TestCase) (passed bool, err error, result *TestResult) {
-	var request *http.Request
-	var response *http.Response
-	result = &TestResult{
-		TestCase:  *test,
-		StartTime: time.Now().UTC(),
-	}
+func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
+	defer t.Close()
 
-	defer func() { result.EndTime = time.Now().UTC() }()
-
-	if test.Skip {
-		result.Fields = []*FieldMatcherResult{
-			{
-				Error:         "Skipping test as configured",
-				ObjectKeyPath: "test.skip",
-				Status:        true,
-			},
-		}
-		result.Passed = true
-		return true, nil, result
-	}
-
-	route, err := test.GetTestRoute()
-	if err != nil {
-		return false, fmt.Errorf("Failed to determine test route: %v", err), result
-	}
-	result.ResolvedRoute = route
-
-	input, err := test.GetTestInput()
-	if err != nil {
-		return false, fmt.Errorf("Failed to get test input: %v", err), result
-	}
-
-	switch test.Method {
-	case "GET":
-		request, err = http.NewRequest("GET", route, input)
-	case "POST":
-		request, err = http.NewRequest("POST", route, input)
-	}
-
-	headers, err := test.GetTestHeaders()
-	if err != nil {
-		return false, fmt.Errorf("Failed to resolve test headers parameter: %v", err), result
-	}
-	headersMap := headers.(map[interface{}]interface{})
-	for k := range headersMap {
-		key := fmt.Sprintf("%v", k)
-		val := headersMap[k].(string)
-		request.Header.Set(key, val)
-	}
-
-	if t.BeforeEachTest != nil {
-		t.BeforeEachTest(test, request)
-	}
-
-	response, err = t.Client.Do(request)
-	if err != nil {
-		return false, fmt.Errorf("Failed to fetch API response: %v", err), result
-	}
-	result.StatusCode = response.StatusCode
-
-	// convert response headers to json for validation
-	var responseHeaders map[string]interface{}
-	headerData, _ := json.Marshal(&response.Header)
-	if err := json.Unmarshal(headerData, &responseHeaders); err != nil {
-		return false, fmt.Errorf("Failed to convert response headers: %v\n%v", err, response.Header), result
-	}
-	result.ResponseHeaders = responseHeaders
-
-	// convert response body to json for validation
-	responseData, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return false, fmt.Errorf("Failed to fetch API response: %v", err), result
-	}
-
-	var responseJson map[string]interface{}
-	if test.BinaryResponse == false && len(responseData) > 0 {
-		err = json.Unmarshal(responseData, &responseJson)
-		if err != nil {
-			return false, fmt.Errorf("Failed to unmarshal API response: %v\n%v", err, responseData), result
-		}
-	} else if test.BinaryResponse {
-		// if we're expecting a binary response, generate a json representation of the data to use with our
-		// validation logic
-		hasher := md5.New()
-		hasher.Write(responseData)
-		fileHash := string(hex.EncodeToString(hasher.Sum(nil)))
-
-		responseJson = make(map[string]interface{})
-		responseJson["size"] = float64(len(responseData))
-		responseJson["hash"] = fileHash
-	}
-
-	result.Response = responseJson
-	result.Passed, err, result.Fields = test.Validate(response.StatusCode, responseJson, responseHeaders)
-	if t.AfterEachTest != nil {
-		t.AfterEachTest(test, response, result.Passed, result.Fields)
-	}
-
-	return result.Passed, err, result
-}
-
-func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
 	anyFailed := false
 
 	suiteResults := SuiteResult{
@@ -662,12 +155,17 @@ func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
 	}
 
 	for _, test := range t.Tests {
-		if test.ExitOnRun {
+		if test.Config.ExitOnRun {
 			break
 		}
-		passed, err, results := t.ExecuteTest(&test)
+
+		if t.Verbose {
+			fmt.Printf(">> In Progress: %v\n", test.Config.Name)
+		}
+
+		passed, results, err := test.Execute(testTags)
 		if err != nil {
-			return false, err, suiteResults
+			return false, suiteResults, err
 		}
 
 		if passed {
@@ -676,9 +174,18 @@ func (t *TestSuite) ExecuteTests() (bool, error, SuiteResult) {
 			anyFailed = true
 			suiteResults.Failed += 1
 		}
+
+		if t.Verbose {
+			statusStr := "Pass"
+			if !passed {
+				statusStr = "Fail"
+			}
+			fmt.Printf("<< Done: [%v] %v\n", statusStr, test.Config.Name)
+		}
+
 		suiteResults.Duration += results.EndTime.Sub(results.StartTime)
 		suiteResults.Results = append(suiteResults.Results, results)
 	}
 
-	return !anyFailed, nil, suiteResults
+	return !anyFailed, suiteResults, nil
 }
