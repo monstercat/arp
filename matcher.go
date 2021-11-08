@@ -134,6 +134,7 @@ type ExecutableMatcher struct {
 type FieldPathKey struct {
 	Key          string
 	IsArrayIndex bool
+	IsObjectRoot bool
 }
 
 type FieldMatcherPath struct {
@@ -144,16 +145,25 @@ type FieldMatcherPath struct {
 }
 
 func (f *FieldMatcherPath) getObjectPath(length int) string {
+	// build the full json string path
 	pathStr := ""
-	for index, k := range f.Keys {
-		if index >= length {
+	nodeCount := 0
+	for _, k := range f.Keys {
+		if nodeCount >= length {
 			return pathStr
 		}
+		//if index >= length {
+		//	return pathStr
+		//}
 
 		if k.IsArrayIndex {
 			pathStr += fmt.Sprintf("[%v]", k.Key)
+			nodeCount++
+		} else if k.IsObjectRoot {
+			pathStr += fmt.Sprintf("{}")
 		} else {
 			pathStr += "." + k.Key
+			nodeCount++
 		}
 	}
 
@@ -161,6 +171,7 @@ func (f *FieldMatcherPath) getObjectPath(length int) string {
 }
 
 func (f *FieldMatcherPath) GetParentPath() string {
+
 	return f.getObjectPath(len(f.Keys) - 1)
 }
 
@@ -972,6 +983,8 @@ func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interf
 				return err
 			}
 		case *ObjectMatcher:
+			last := &paths.Keys[len(paths.Keys)-1]
+			last.IsObjectRoot = true
 			if err := r.loadObjectFields(parentNode, val.Properties, paths); err != nil {
 				return err
 			}
@@ -1125,7 +1138,7 @@ func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConf
 				}
 				result.NodeChain = append(result.NodeChain, &DepthMatchResponseNode{
 					Node:     node,
-					NodePath: path,
+					NodePath: path + "{}",
 				})
 
 				return result
@@ -1209,20 +1222,29 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 	aggregatedStatus := true
 	sharedNodes := make(map[string]NodeCacheObj)
 
-	//for _, matcher := range r.Config {
 	for mIndex := 0; mIndex < len(r.Config); mIndex++ {
 		matcher := r.Config[mIndex]
 
 		var node interface{}
-		nodeParentKey := matcher.ObjectKeyPath.GetParentPath()
 		node = response
 		pathStr := ""
 
-		keys := matcher.ObjectKeyPath.Keys
-
-		if cachedNode, ok := sharedNodes[nodeParentKey]; ok {
-			node = cachedNode.Node
-			keys = keys[cachedNode.PathIndex:]
+		// look up any cached nodes from the most specific path to the most generic
+		keys := matcher.ObjectKeyPath.Keys[:]
+		distance := 0
+		for i, _ := range matcher.ObjectKeyPath.Keys {
+			nodePath := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - i)
+			if cachedNode, ok := sharedNodes[nodePath]; ok {
+				node = cachedNode.Node
+				if distance == 0 {
+					// exact node match means we can skip trying to iterate on its sub nodes below
+					keys = []FieldPathKey{}
+				} else {
+					keys = keys[cachedNode.PathIndex:]
+				}
+				break
+			}
+			distance++
 		}
 
 		_, isObjMatcher := matcher.Matcher.(*ObjectMatcher)
@@ -1275,10 +1297,11 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 					if result.FoundNode.Status && result.FoundNode.MatchedNodeKey {
 						node = result.FoundNode.Node
 						pathStr = result.FoundNode.NodePath
-						// add all parent nodes leading up to the result to our cache so we can
+						// add all parent nodes leading up to the result to our cafmt.che so we can
 						// look them up without having to search again.
-						for _, chainNode := range result.NodeChain[1:] {
-							sharedNodes[chainNode.NodePath] = NodeCacheObj{
+						for i, chainNode := range result.NodeChain {
+							cachepath := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
+							sharedNodes[cachepath] = NodeCacheObj{
 								Node:      chainNode.Node,
 								PathIndex: pathIndex,
 							}
