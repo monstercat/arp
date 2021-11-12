@@ -117,9 +117,7 @@ func runTests(args ProgramArgs) bool {
 		r.Passed, r.TestResults, r.Error = suite.ExecuteTests(args.Tags)
 		results = append(results, r)
 		passed = r.Passed
-		err = r.Error
 		testingDuration = r.TestResults.Duration
-
 	} else if *args.TestRoot != "" {
 		var multiTestSuite *MultiTestSuite
 		multiTestSuite, err = NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)

@@ -11,9 +11,22 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	WS_ENC_BASE64   = "base64gzip"
+	WS_ENC_HEX      = "hex"
+	WS_ENC_FILE     = "file"
+	WS_ENC_EXTERNAL = "external"
+
+	WS_MSG_TEXT = "text"
+	WS_MSG_JSON = "json"
+	WS_MSG_BIN  = "binary"
 )
 
 type ByteCountWriter struct {
@@ -42,6 +55,7 @@ func (bj *BinResponseJson) GenericJSON() map[string]interface{} {
 
 type WSMessage struct {
 	Payload     interface{} `yaml:"payload" json:"payload"`
+	Args        []string    `yaml:"args" json:"args"`
 	WriteOnly   bool        `yaml:"WriteOnly" json:"WriteOnly"`
 	ReadOnly    bool        `yaml:"readOnly" json:"readOnly"`
 	Response    string      `yaml:"response" json:"response"`
@@ -170,7 +184,11 @@ func executeRPC(test *TestCase, result *TestResult, input interface{}) error {
 		client, err = rpc.DialHTTP("tcp", addr)
 	}
 
-	defer client.Close()
+	defer func() {
+		if client != nil {
+			client.Close()
+		}
+	}()
 
 	if err != nil {
 		return fmt.Errorf("failed to dial rpc client: %v", err)
@@ -240,6 +258,8 @@ func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, resul
 	if !testInput.ReadOnly {
 		err := writeWebsocketPayload(client, testInput)
 		if err != nil {
+			//result.Passed = false
+			//result.RunError = err
 			return err
 		}
 	}
@@ -327,11 +347,11 @@ func getBinaryJson(savePath string, isExpected bool, response io.Reader) (map[st
 func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 	msType := websocket.TextMessage
 	switch input.MessageType {
-	case "text":
+	case WS_MSG_TEXT:
 		fallthrough
-	case "json":
+	case WS_MSG_JSON:
 		msType = websocket.TextMessage
-	case "binary":
+	case WS_MSG_BIN:
 		msType = websocket.BinaryMessage
 	}
 
@@ -351,7 +371,7 @@ func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 	}
 
 	if input.Encoding == "" {
-		input.Encoding = "base64gzip"
+		input.Encoding = WS_ENC_BASE64
 	}
 
 	socketWriter, err := client.NextWriter(msType)
@@ -362,8 +382,13 @@ func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 	defer socketWriter.Close()
 	var inputReader io.Reader
 
+	var cmd *exec.Cmd
+	var wg *sync.WaitGroup
+	var cmdErr error
+	var cmdStdErr string
+
 	switch input.Encoding {
-	case "base64gzip":
+	case WS_ENC_BASE64:
 		base64gz, ok := input.Payload.(string)
 		if !ok {
 			return fmt.Errorf("websocket payload expected to be base64 gzip - found non-string value instead")
@@ -375,7 +400,7 @@ func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 		}
 		inputReader = b64R
 		defer b64R.Close()
-	case "hex":
+	case WS_ENC_HEX:
 		hexInput, ok := input.Payload.(string)
 		if !ok {
 			return fmt.Errorf("websocket payload expected to be a hex string - found non-string value instead")
@@ -383,8 +408,7 @@ func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 
 		hexReader := hex.NewDecoder(bytes.NewReader([]byte(hexInput)))
 		inputReader = hexReader
-
-	case "file":
+	case WS_ENC_FILE:
 		// stream the file contents through the websocket message
 		filepath, ok := input.Payload.(string)
 		if !ok {
@@ -397,10 +421,48 @@ func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
 		}
 		defer fileReader.Close()
 		inputReader = fileReader
+	case WS_ENC_EXTERNAL:
+		cmd = exec.Command(fmt.Sprintf("%v", input.Payload), input.Args...)
+
+		inputReader, err = cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("failed to initialize stdout pipe for extern input: %v: %v", input.Payload, err)
+		}
+		errPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return fmt.Errorf("failed to initialize stderr pipe for extern input: %v: %v", input.Payload, err)
+		}
+
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start external input: %v: %v", input.Payload, err)
+		}
+
+		wg = &sync.WaitGroup{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, err := ioutil.ReadAll(errPipe)
+			if err != nil {
+				cmdErr = err
+			} else {
+				cmdStdErr = string(data)
+			}
+		}()
 	}
 
 	io.Copy(socketWriter, inputReader)
 	socketWriter.Close()
+
+	if cmd != nil && wg != nil {
+		wg.Wait()
+		if err := cmd.Wait(); err != nil {
+			return fmt.Errorf("external input failed to execute: %v: %v", err, cmdStdErr)
+		}
+
+		if cmdErr != nil {
+			return fmt.Errorf("encountered an error while reading stderr for external input: %v", err)
+		}
+	}
 
 	return nil
 }

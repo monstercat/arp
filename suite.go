@@ -165,6 +165,7 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 
 		passed, results, err := test.Execute(testTags)
 		if err != nil {
+			fmt.Printf("<< Done: [Fail] %v\n", test.Config.Name)
 			return false, suiteResults, err
 		}
 

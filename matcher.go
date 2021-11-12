@@ -152,9 +152,6 @@ func (f *FieldMatcherPath) getObjectPath(length int) string {
 		if nodeCount >= length {
 			return pathStr
 		}
-		//if index >= length {
-		//	return pathStr
-		//}
 
 		if k.IsArrayIndex {
 			pathStr += fmt.Sprintf("[%v]", k.Key)
@@ -171,7 +168,6 @@ func (f *FieldMatcherPath) getObjectPath(length int) string {
 }
 
 func (f *FieldMatcherPath) GetParentPath() string {
-
 	return f.getObjectPath(len(f.Keys) - 1)
 }
 
@@ -871,13 +867,13 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 	}
 
 	status := true
-	stuff := exec.Command(resolvedBinPath.(string), argStrings...)
+	cmd := exec.Command(resolvedBinPath.(string), argStrings...)
 
-	result, err := stuff.CombinedOutput()
+	result, err := cmd.CombinedOutput()
 	sanitizedResult := string(result)
 
 	if m.ReturnCode != nil {
-		status = *m.ReturnCode == stuff.ProcessState.ExitCode()
+		status = *m.ReturnCode == cmd.ProcessState.ExitCode()
 	}
 
 	if !status && err != nil {

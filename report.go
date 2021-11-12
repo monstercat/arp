@@ -290,8 +290,8 @@ func PrintReport(opts ReportOptions, passed bool, testingDuration time.Duration,
 		}
 
 		if r.Error != nil {
-			PrintIndentedLn(1, opts.Colors.BrightRed("Some tests failed to execute:\n"))
-			PrintIndentedLn(1, "%v\n", r.Error)
+			PrintIndentedLn(1, opts.Colors.BrightRed("One or more tests failed within execution and the test suite could not be completed:\n"))
+			PrintIndentedLn(1, "%q\n\n", r.Error)
 		}
 	}
 

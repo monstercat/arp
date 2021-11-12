@@ -1,11 +1,15 @@
 # Arp
-Short for Arpeggio, is a tool for automating **REST** JSON API calls that can be used for integration tests, simulation, checks, etc.
+Short for Arpeggio, is a tool for automating and validating RESTful, RPC, and Websocket network calls. This tool is intended to be used for writing code free, quick, and flexible, integration or end-to-end tests. 
 
-## About
-This tool provides a lightweight black-box testing framework for your REST API. 
-All you need to provide are your inputs to the route and a validation definition for the response. 
-The tool will then execute the requests, run your validation against the response, and then print a pretty report at the end. All tests are
-written as YAML configs so no coding is required.
+Excluding the validation aspect, it can be used to orchestrate a sequence of network calls where the outputs of a call can be mapped to inputs of the subsequent calls.
+
+## Hilights
+* Tests are defined as YAML configuration files, no coding required
+* Validations are defined based on the expectation that an API call returns JSON formatted data. Each field can be validated using exact or partial matching.
+* Non-JSON formatted responses (e.g. binaries from download URLS, websocket requests) are automatically transformed into a JSON representable object that exposes simple properties for validation (size in bytes, sha256sum). If these properties are not enough, the response can be dumped to a local file and passed to an external program for validation as part of the test definition!
+* Individual fields from a test case's JSON response can be persisted and used as inputs or within the field validators for subsequent test cases via variables
+* Features an interactive mode for stepping through your test cases, retrying individual tests, viewing stored variables, and even hot-reloading of your test definition
+
 
 ### The Inspiration
 If you've ever had to write a backend API, you have probably written curl commands or configured PostMan to execute calls against your API for testing purposes. In this testing process, you have probably encountered one or more of the following scenarios:
@@ -28,11 +32,6 @@ not much more effort to extend that into a repeatable test case.
 * **Validation Definition:** A structure containing rules on how to validate a specific response property
 * **Validation Matcher:** A comparison value/placeholder to evaluate against a primitive data type within the response (e.g. bool, string, int) 
 
-### Features
-* **Test definitions as Config:** Use yaml to define your tests. It's easy to write and less verbose than JSON. You can use anchoring to reuse sections or values in multiple places.
-* **Data Persistence:** You can store results that your validation matches and use them as inputs or matchers in subsequent tests
-* **Interactive Mode:** You can run test files in an interactive mode allowing you to retry individual tests, evaluate variables, or dump the data in the data store at that point in the test suite's execution
-
 ## Installation
 ```shell
 export GO111MODULE=on 
@@ -46,36 +45,51 @@ git clone https://github.com/monstercat/arp.git && \
 ```text
 Usage of ./arp:
   -always-headers
-    	Always print the request and response headers in long test report output whether any matchers are defined for them or not.
+        Always print the request and response headers in long test report output whether any matchers are defined for them or not.
   -colors
-    	Print test report with colors. (default true)
+        Print test report with colors. (default true)
   -error-report
-    	Generate a test report that only contain failing test results.
+        Generate a test report that only contain failing test results.
   -file string
-    	Path to an individual test file to execute.
+        Path to an individual test file to execute.
   -fixtures string
-    	Path to yaml file with data to include into the test scope via test variables.
+        Path to yaml file with data to include into the test scope via test variables.
   -short
-    	Print a short report for executed tests containing only the validation results. (default true)
+        Print a short report for executed tests containing only the validation results. (default true)
   -short-fail
-    	Keep the report short when errors are encountered rather than expanding with details.
+        Keep the report short when errors are encountered rather than expanding with details.
   -step
-    	Run tests in interactive mode. Requires a test file to be provided with '-file'
+        Run tests in interactive mode. Requires a test file to be provided with '-file'
   -tag value
-    	Only execute tests with tags matching this value. Tag input supports comma separated values which will execute tests that contain any on of those values. Subsequent tag parameters will AND with previous tag inputs to determine what tests will be run. Specifying no tag parameters will execute all tests.
+        Only execute tests with tags matching this value. Tag input supports comma separated values which will execute tests that contain any on of those values. Subsequent tag parameters will AND with previous tag inputs to determine what tests will be run. Specifying no tag parameters will execute all tests.
   -test-root string
-    	Folder path containing all the test files to execute.
+        Folder path containing all the test files to execute.
   -threads int
-    	Max number of test files to execute concurrently. (default 16)
+        Max number of test files to execute concurrently. (default 16)
   -tiny
-    	Print an even tinier report output than what the short flag provides. Only prints test status, name, and description. Failed tests will still be expanded.
+        Print an even tinier report output than what the short flag provides. Only prints test status, name, and description. Failed tests will still be expanded.
   -var value
-    	Prepopulate the tests data store with a single KEY=VALUE pair. Multiple -var parameters can be provided for additional key/value pairs.
+        Prepopulate the tests data store with a single KEY=VALUE pair. Multiple -var parameters can be provided for additional key/value pairs.
 ```
 
+TLDR;
 
-## Sample Test
-Here is a simple test case that can be executed
+All tests in a directory can be executed with the `-test-root` flag like so:
+
+```./arp -test-root="<path to directory containing foo_test.yaml>"```
+
+Individual files can be executed using the `-file` flag:
+
+```./arp -file=<path>/foo_test.yaml```
+
+## Sample Tests
+
+
+
+### Natural JSON Response
+Here is a simple test case for a REST API returning a JSON response that can be executed:
+
+![REST Output](./.github/images/demo.gif)
 
 ```yaml
 # sample.yaml
@@ -122,19 +136,45 @@ tests:
                   matches: https://.*
 ```
 
-Sample output:
-
-![Sample Output](./.github/images/demo.gif)
 
 
-All tests in a directory can be executed with the `-test-root` flag like so:
 
-```./arp -test-root="<path to directory containing foo_test.yaml>"```
+### Binary Response
 
-Individual files can be executed using the `-file` flag:
+When you get a non-JSON response from a network call, it gets transformed into a JSON representable object for validation:
 
-```./arp -file=<path>/foo_test.yaml```
+![Binary Output](./.github/images/download.gif)
 
+
+```yaml
+tests:
+  - name: Test Download
+    description: Make sure we download the expected file
+    route: https://www.dundeecity.gov.uk/sites/default/files/publications/civic_renewal_forms.zip
+    method: GET
+    response:
+      code: 200
+      # Set this to true so the binary payload can be formatted correctly for easy validation.
+      binary: true
+      # response will be saved to this file
+      filePath: /tmp/myfile.zip
+      payload:
+        # We can validate the size in bytes if it is known ahead of time
+        size:
+          type: integer
+          matches: $any
+        # and/or we can validate the sha256 sum of the data
+        sha256sum:
+          type: string
+          matches: $any
+        # This field is always made available (whether a file path is 
+        # provided or not) allowing an 'external' validator to process the file.
+        saved:
+          type: string
+          matches: /tmp/myfile.zip
+```
+
+---
 
 ### Test Structure Breakdown
 
@@ -193,7 +233,7 @@ tests:
     # If the following configs are provided, the test will spin up an RPC client and attempt to make a call
     # to the given address.
     rpc:
-      protocol: 'HTTP' | 'TCP'
+      protocol: HTTP | TCP
       address: <string>
       procedure: <string>
 
@@ -334,7 +374,7 @@ tests:
         # What message type to send the websocket request. Default: text
       - type: binary | text
 
-        # How the payload is encoded. Default: base64gzip
+        # How the payload is encoded when sending 'binary' websocket messages. Default: base64gzip
         #
         # * Base64 encoded embedded GZIP: your contents are gzipped and encoded as base64 explicitly for embedding in
         #        this test file. The test client will decode and extract the data to send the raw bytes over the wire
@@ -342,10 +382,19 @@ tests:
         #        send the raw bytes over the wire.
         # * File: you have a local file that you want to send. The test client will read the entire file to memory and
         #        send the raw bytes over the wire.
-        encoding: base64gzip| hex | file
+        # * External: you want to call an external program/binary that will generate or encode your requests input at runtime.
+        #           The standard output of the specified program will be streamed through the established websocket connection. If
+        #           a non-zero exit code is returned, the test will fail and the executables STDERR contents will be provided
+        #            
+        encoding: base64gzip | hex | file | external
 
         # Payload to send in the request.
-        payload: <object> | <string>
+        payload: <object> | <string> | <external binary path>
+
+        # Pass the following arguments to the binary specified in the `payload` when `encoding` is set to `external.
+        args:
+          - <string>
+          - <string>
         
         # If set to true, the test client will not wait for a response and continue to send the next websocket message.
         # Default: false
@@ -419,6 +468,14 @@ tests:
         - readOnly: true
           writeOnly: true
           payload: This is a no-op and nothing will be done
+
+          # Send the standard output of a program as our websocket payload
+        - type: text
+          encoding: external
+          payload: /bin/date
+          args:
+            - '-u'
+            - '-R'
 ```
 
 ## Response Format
