@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	MissingDSKeyFmt = "Attempted to retrieve data from data store that does not exist: key: %v"
-
-	StatusCodePath = "response.StatusCode"
-	HeadersPath    = "response.Header"
+	MissingDSKeyFmt   = "Attempted to retrieve data from data store that does not exist: key: %v"
+	BadIndexDSFmt     = "Attempted to index into a data store value with a non-positive or non-integer value: %v"
+	IndexExceedsDSFmt = "Index for data store value exceeds its max length: %v"
+	StatusCodePath    = "response.StatusCode"
+	HeadersPath       = "response.Header"
 )
 
 type TestSuiteCfg struct {

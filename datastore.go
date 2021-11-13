@@ -2,6 +2,7 @@ package arp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -77,9 +78,33 @@ func parseVar(input string) VarStack {
 
 func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
 	keys := strings.Split(variable, ".")
+
+	// Extract array indexing from the keys as their own key for iterating the datastore.
+	var expandedKeys []string
+	for _, k := range keys {
+		hasIndex := false
+		index := ""
+		for i, c := range k {
+			if c == '[' {
+				hasIndex = true
+				expandedKeys = append(expandedKeys, k[:i])
+				continue
+			}
+
+			if c != ']' && hasIndex {
+				index += string(c)
+			} else if c == ']' {
+				expandedKeys = append(expandedKeys, index)
+			}
+		}
+		if !hasIndex {
+			expandedKeys = append(expandedKeys, k)
+		}
+	}
+
 	var node interface{}
 	node = *t
-	for _, k := range keys {
+	for _, k := range expandedKeys {
 		switch v := node.(type) {
 		case DataStore:
 			if nextNode, ok := v[k]; !ok {
@@ -93,6 +118,17 @@ func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
 			} else {
 				node = nextNode
 			}
+		case []interface{}:
+			idx, err := strconv.ParseUint(k, 10, 64)
+			if err != nil {
+				// should catch non integer and negative value
+				return "", fmt.Errorf(BadIndexDSFmt, variable)
+			}
+			if idx > uint64(len(v)) {
+				return "", fmt.Errorf(IndexExceedsDSFmt, variable)
+			}
+
+			node = v[idx]
 		}
 	}
 

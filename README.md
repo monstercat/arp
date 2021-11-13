@@ -478,27 +478,6 @@ tests:
             - '-R'
 ```
 
-## Response Format
-
-Arp only supports validation of JSON data structures. However, Arp has built in mechanisms to transform non-JSON data into a JSON representable state for validation.
-
-For example, pointing an Arp test a route containing a zip file: https://www.dundeecity.gov.uk/sites/default/files/publications/civic_renewal_forms.zip
-
-Produces a JSON representation of it like the following:
-```json
-  response: {
-   "NOTICE": [
-    "Unexpected non-JSON response was returned from this call triggering a fallback to its binary representation.",
-    "Response data has been written to the path in the 'saved' field of this object."
-   ],
-   "saved": "/var/folders/47/56666ndd29n748s01t3f4cdr0000gn/T/binary-response-483156933",
-   "sha256sum": "c8bceaae2017481d3e1fd5b47fc67d93f1e049c057461effabb9152b571d65b2",
-   "size": 6615
-  }
-```
-which can be validated like any other JSON REST API response. Checkout the _Validations > Binary Response Validation_ section for more details.
-
-
 ## Validations
 
 Each JSON data type has its own set of validation rules that can be applied. Some types have a short form available that support a more limited feature set of the regular validation definition. All short forms (other than strings) do not support variables from data store since the matcher type is derived from the value specified prior to the test execution.
@@ -1319,8 +1298,7 @@ For example, if we wanted to store the ID  of the user Charles from the sample t
 
 ### Fixtures
 
-The data store can be pre-populated with read only data prior to executing your tests with a file containing data definitions. This file should consist of a maps that terminate to
-a string value. E.g.
+The data store can be pre-populated with read only data prior to executing your tests with a file containing data definitions. This file should consist of a maps and arrays that terminate to a string value. E.g.
 
 ```yaml
 #fixtures.yaml
@@ -1329,12 +1307,16 @@ Hosts:
     Local: http://localhost
     RealBeta: http://beta.NotLocalHost.com
   Prod: http://NotLocalHost.com
+Search:
+  - Bar
+  - Bazz
 
 # foo_test.yaml
 tests:
-  - name: List Foos
+  - name: List Foos by Bar
     # Access our host using the fixture mapping with dot ('.') notation
-    route: '@{Hosts.Beta.Local}/foo?search=Bar'
+    # and index into our array using '[<index>]'
+    route: '@{Hosts.Beta.Local}/foo?search=@{Search[0]}'
 ```
 
 ### Environment Variables
