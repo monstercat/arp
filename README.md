@@ -53,7 +53,7 @@ Usage of ./arp:
   -file string
         Path to an individual test file to execute.
   -fixtures string
-        Path to yaml file with data to include into the test scope via test variables.
+        Path to yaml file with data to include into the test scope via test variables. This file is also merged with each test file such that any YAML anchors defined within it are available for reference in the test files.
   -short
         Print a short report for executed tests containing only the validation results. (default true)
   -short-fail
@@ -1497,3 +1497,4 @@ tests:
             - *any-string
 ```
 
+The fixture and test files are concatenated together on load making anchors within the fixtures file available for reference in your test cases as well. This can be used to provide common anchors that can be used across all test files without having to redefine them in each test file.

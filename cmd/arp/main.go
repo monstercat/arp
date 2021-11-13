@@ -55,7 +55,8 @@ func (p *ProgramArgs) Init() {
 	p.Colorize = flag.Bool("colors", true, "Print test report with colors.")
 	p.ErrorsOnly = flag.Bool("error-report", false, "Generate a test report that only contain failing test results.")
 	p.TestFile = flag.String("file", "", "Path to an individual test file to execute.")
-	p.Fixtures = flag.String("fixtures", "", "Path to yaml file with data to include into the test scope via test variables.")
+	p.Fixtures = flag.String("fixtures", "", "Path to yaml file with data to include into the test scope via test variables. "+
+		"This file is also merged with each test file such that any YAML anchors defined within it are available for reference in the test files.")
 	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results.")
 	p.ShortErrors = flag.Bool("short-fail", false, "Keep the report short when errors are encountered rather than expanding with details.")
 	p.Interactive = flag.Bool("step", false, "Run tests in interactive mode. Requires a test file to be provided with '-file'")
@@ -365,7 +366,7 @@ func interactiveMode(args ProgramArgs) bool {
 			loaded := false
 
 			for !loaded {
-				loaded, err = suite.ReloadFile(*args.TestFile)
+				loaded, err = suite.ReloadFile(*args.TestFile, *args.Fixtures)
 				if err != nil {
 					fmt.Printf("Hot reload error: %v\nPlease correct your file then press 'enter' to reload...\n", err)
 					input := ""

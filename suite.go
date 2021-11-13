@@ -2,6 +2,7 @@ package arp
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 		return suite, err
 	}
 
-	status, err := suite.LoadTests(testFile)
+	status, err := suite.LoadTests(testFile, fixtures)
 
 	if !status && err == nil {
 		return nil, nil
@@ -57,9 +58,9 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	return suite, nil
 }
 
-func (t *TestSuite) ReloadFile(testFile string) (bool, error) {
+func (t *TestSuite) ReloadFile(testFile string, fixtures string) (bool, error) {
 	t.Tests = make([]*TestCase, 0)
-	return t.LoadTests(testFile)
+	return t.LoadTests(testFile, fixtures)
 }
 
 func (t *TestSuite) InitializeDataStore(fixtures string) error {
@@ -115,8 +116,29 @@ func (t *TestSuite) Close() {
 	}
 }
 
-func (t *TestSuite) LoadTests(testFile string) (bool, error) {
-	data, err := os.ReadFile(testFile)
+func (t *TestSuite) LoadTests(testFile string, fixtures string) (bool, error) {
+	var readers []io.Reader
+
+	if fixtures != "" {
+		fix, err := os.Open(fixtures)
+		if err != nil {
+			return false, fmt.Errorf("failed to open fixture file: %v - %v", fixtures, err)
+		}
+
+		readers = append(readers, fix)
+	}
+
+	tests, err := os.Open(testFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to open test file: %v - %v", testFile, err)
+	}
+	readers = append(readers, tests)
+
+	// combine fixtures and test file into a single source so tests can utilize yaml anchors defined in
+	// the fixtures file
+	multiReader := io.MultiReader(readers...)
+
+	data, err := io.ReadAll(multiReader)
 	if err != nil {
 		return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
 	}
