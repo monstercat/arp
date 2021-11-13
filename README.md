@@ -1390,6 +1390,51 @@ export HOST_STAGE="Beta"
 2. `@{Hosts.Beta}/foo` `[@{Hosts.Beta} -> http://localhost]` -> `http://localhost/foo`
 
 
+## Dynamic Inputs
+
+The `input` properties of Test Cases also have the ability to use the output of an executed command as its value. This works similarly to the behavior of variables where it'll perform a straight value replacement (and recursive execution), but uses the syntax of ```$(<path> arg1 arg2 ...)```.
+The output is treated as a regular string and contains both the STDOUT and STDERR data. If the program encounters an error (program returns a non-zero exit code), the test case will not be executed. 
+
+For example, you can use `/bin/date` to provide the current date with your API call:
+
+```yaml
+  input:
+    date: '$(/bin/date -u -R)'
+```
+
+This syntax also supports the usage of variables. All variables are resolved prior to the execution of the command.
+
+```yaml
+  input:
+    something: '$(@{TEST_DIR}/myscript.sh)'
+```
+
+Or you can run some arbitrary shell command:
+
+```yaml
+  input:
+    result: '$(/bin/bash -c "echo \"hello, world\" | base64")'
+```
+
+Arp will recursively execute programs provided in the input starting with the inner most `$(<command>)` allowing for execution chaining like the following:
+
+```yaml
+  input:
+    result: '$(/bin/echo $(/bin/echo "first") $(/bin/echo "second"))'
+```
+
+The above example will execute in the following order:
+1. `$(/bin/echo $(/bin/echo "first") $(/bin/echo "second")) -> [$(/bin/echo "first") -> first] -> $(/bin/echo first $(/bin/echo "second"))`
+2. `$(/bin/echo first $(/bin/echo "second")) -> [$(/bin/echo "second") -> second] -> $(/bin/echo first second)`
+3. `$(/bin/echo first second) -> "first second"`
+
+This unfortunately means that you won't be able to use subshells if you're looking to straight up embed a complicated bash command. In such a scenario it's recommended to put your command in an external script and 
+invoke that script as a dynamic input.
+
+---
+
+This type of dynamic input is not recommended for providing large amounts of data as it will load the entire result in memory. For multi-part form and websockets requests, it's recommended to use their native binary or file
+operations that will allow for data streaming.
 
 
 ## Interactive Mode
@@ -1408,6 +1453,12 @@ For most optimal performance, you can organize your tests in one of the followin
 2. `${test-root}/${api}/{action}.yaml` - Good for separating tests with dependent calls from other tests with no dependencies within the same API scope
 
 ## Pro-Tips:
+
+### Input Warnings
+
+Data provided in a test case's input is resolved at test execution time and NOT while the config is parsed. 
+Make sure to watch out for typos when dealing with websockets that use a mostly fixed form input.
+
 
 ### Using Anchors
 Our input is YAML and YAML supports anchors out of the box to reduce verbosity! Since the tests within yaml file are scoped under the 'tests' key, you can create arbitrary keys for anchoring elsewhere in your test file.

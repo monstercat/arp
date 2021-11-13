@@ -192,6 +192,11 @@ func (t *TestCase) GetResolvedTestInput() (interface{}, error) {
 		return nil, err
 	}
 
+	node, err = RecursiveExecuteCommand(node)
+	if err != nil {
+		return nil, err
+	}
+
 	return node, err
 }
 
