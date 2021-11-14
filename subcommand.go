@@ -86,6 +86,7 @@ func executeCommandStr(input string) (string, error) {
 
 		// regular arguments can be separated by spaces if not quoted
 		if !inQuote && char == ' ' && argStartPos != i {
+			// no +1 on token end to exclude the space delimiter
 			tokens = append(tokens, realCmd[argStartPos:i])
 			argStartPos = i + 1
 		} else if inQuote && char == ' ' {
@@ -94,11 +95,10 @@ func executeCommandStr(input string) (string, error) {
 		} else if !inQuote && char == '"' {
 			//if we aren't in a quoted string and we hit a quote, then we can continue
 			inQuote = true
-			// set our start position for the next argument to exclude the starting quote
-			argStartPos = i + 1
 		} else if inQuote && char == '"' {
 			// if we are in a quote and we hit another quote, we'll treat that as the closing one
-			tokens = append(tokens, realCmd[argStartPos:i])
+			// +1 to include the end quote for our token
+			tokens = append(tokens, realCmd[argStartPos:i+1])
 			inQuote = false
 			// make our next argument starting position skip this closing quote
 			argStartPos = i + 1
@@ -113,6 +113,15 @@ func executeCommandStr(input string) (string, error) {
 	var args []string
 	for _, s := range tokens {
 		newToken := ""
+		// if the whole token is quoted, then we can remove them and promote the nested quotes
+		if s[0] == '"' && s[len(s)-1] == '"' {
+			s = s[1 : len(s)-1]
+		} else {
+			// otherwise, leave the string alone.
+			args = append(args, s)
+			continue
+		}
+
 		for i := 0; i < len(s); i++ {
 			if s[i] == '\\' {
 				escapeEnd := i + 1

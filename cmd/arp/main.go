@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -187,7 +188,7 @@ func interactivePrompt(showOpts bool, canRetry bool, websocketMode bool) {
 		"d) Dump all values in data store",
 		"x) Step through tests until next failure",
 		"q) Hot reload test file",
-		"*) Expand typed variable. e.g. @{host}",
+		"*) Evaluate varaiable or inline command. e.g. @{host}, $(date -u -R)",
 	}
 
 	if showOpts {
@@ -221,15 +222,14 @@ func interactiveInput(tests []*TestCase, curTest int, subTest bool, result *Test
 	}
 	interactivePrompt(true, canRetry, websocketPrompt)
 
+	reader := bufio.NewReader(os.Stdin)
 	for {
-		input := ""
-		fmt.Scanln(&input)
-
+		input, _ := reader.ReadString('\n')
 		if input == "" {
 			return StepInput{}
 		}
 
-		switch strings.ReplaceAll(input, "\n", "") {
+		switch sanitized := strings.ReplaceAll(input, "\n", ""); sanitized {
 		case "n":
 			return StepInput{}
 		case "e":
@@ -248,16 +248,22 @@ func interactiveInput(tests []*TestCase, curTest int, subTest bool, result *Test
 		case "q":
 			return StepInput{HotReload: true}
 		default:
-			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(input)
+			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(sanitized)
 			if err != nil {
 				fmt.Printf("\nFailed to expand variable: %v\n", err)
 			} else {
-				if _, ok := expanded.(string); !ok {
+				if s, ok := expanded.(string); !ok {
 					data, _ := json.MarshalIndent(expanded, "", IndentStr(1))
 					expanded = string(data)
+				} else {
+					executed, err := ExecuteCommand(s)
+					if err != nil {
+						fmt.Printf("\nFailed to execute command: %v\n", err)
+					}
+					expanded = executed
 				}
 
-				fmt.Printf("%v -> %v\n", input, expanded)
+				fmt.Printf("%v -> %v\n", sanitized, expanded)
 			}
 		}
 
