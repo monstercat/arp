@@ -162,10 +162,16 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 	}
 
 	for i, v := range toResolve {
-		varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
-		resolvedVar, err := t.resolveVariable(varKey)
-		if err != nil {
-			return nil, err
+		var resolvedVar interface{}
+		// make sure we are only resolving strings that are variables and not strings that were already resolved from
+		// variables.
+		if strings.HasPrefix(v.ResolvedVarName, "@{") && strings.HasSuffix(v.ResolvedVarName, "}") {
+			var err error
+			varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
+			resolvedVar, err = t.resolveVariable(varKey)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		if v.Nested == 0 {

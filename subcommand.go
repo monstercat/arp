@@ -189,10 +189,15 @@ func ExecuteCommand(input string) (interface{}, error) {
 	}
 
 	for i, v := range toExecute {
-		commandOutput, err := executeCommandStr(v.ExecuteCommandResult)
-		if err != nil {
-			errMsg := fmt.Sprintf("Execution error: %v: %q", err, commandOutput)
-			return errMsg, fmt.Errorf(errMsg)
+		var commandOutput string
+		// make sure we are executing commands and not the results of commands that were already executed
+		if strings.HasSuffix(v.ExecuteCommandResult, "$(") && strings.HasPrefix(v.ExecuteCommandResult, ")") {
+			var err error
+			commandOutput, err = executeCommandStr(v.ExecuteCommandResult)
+			if err != nil {
+				errMsg := fmt.Sprintf("Execution error: %v: %q", err, commandOutput)
+				return errMsg, fmt.Errorf(errMsg)
+			}
 		}
 
 		if v.Nested == 0 {
