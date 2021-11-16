@@ -37,6 +37,9 @@ func (t *MultiTestSuite) LoadTests(testDir string, fixtures string) error {
 			if err != nil {
 				return err
 			}
+			if len(suite.Tests) == 0 {
+				return nil
+			}
 
 			if suite != nil {
 				t.Suites[path] = suite
