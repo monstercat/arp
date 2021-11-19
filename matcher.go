@@ -56,6 +56,8 @@ const (
 	TYPE_OBJ   = "object"
 	TYPE_BOOL  = "bool"
 	TYPE_EXEC  = "external"
+
+	DEFAULT_PRIORITY = 9999
 )
 
 type FieldMatcher interface {
@@ -144,35 +146,39 @@ type FieldMatcherPath struct {
 	IsExecutable   bool
 }
 
-func (f *FieldMatcherPath) getObjectPath(length int) string {
+func (f *FieldMatcherPath) getObjectPath(length int) (string, []FieldPathKey) {
 	// build the full json string path
 	pathStr := ""
 	nodeCount := 0
-	for _, k := range f.Keys {
+	remainingKeys := f.Keys
+	for i, k := range f.Keys {
+		remainingKeys = f.Keys[i:]
 		if nodeCount >= length {
-			return pathStr
+			return pathStr, remainingKeys
 		}
 
 		if k.IsArrayIndex {
 			pathStr += fmt.Sprintf("[%v]", k.Key)
 			nodeCount++
 		} else if k.IsObjectRoot {
-			pathStr += fmt.Sprintf("{}")
+			pathStr += fmt.Sprintf(".%v", k.Key)
 		} else {
 			pathStr += "." + k.Key
 			nodeCount++
 		}
 	}
 
-	return pathStr
+	return pathStr, remainingKeys
 }
 
 func (f *FieldMatcherPath) GetParentPath() string {
-	return f.getObjectPath(len(f.Keys) - 1)
+	path, _ := f.getObjectPath(len(f.Keys) - 1)
+	return path
 }
 
 func (f *FieldMatcherPath) GetPath() string {
-	return f.getObjectPath(len(f.Keys))
+	path, _ := f.getObjectPath(len(f.Keys))
+	return path
 }
 
 type FieldMatcherConfig struct {
@@ -205,8 +211,7 @@ type DepthMatchResponse struct {
 }
 
 type NodeCacheObj struct {
-	Node      interface{}
-	PathIndex int
+	Node interface{}
 }
 
 func matchPattern(pattern string, field []byte) (bool, error) {
@@ -244,7 +249,8 @@ func getMatcherPriority(node map[interface{}]interface{}) int {
 		}
 	}
 
-	return 0
+	// default to a low priority to make setting high priority matchers easier
+	return DEFAULT_PRIORITY
 }
 
 func handleExistence(node interface{}, exists bool, canBeNull bool) (bool, bool, string) {
@@ -998,24 +1004,28 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 	switch v := fieldNode.(type) {
 	case string:
 		foundMatcher = &StringMatcher{
-			Value:  &v,
-			Exists: true,
+			Value:    &v,
+			Exists:   true,
+			Priority: DEFAULT_PRIORITY,
 		}
 	case float64:
 		foundMatcher = &FloatMatcher{
-			Value:  &v,
-			Exists: true,
+			Value:    &v,
+			Exists:   true,
+			Priority: DEFAULT_PRIORITY,
 		}
 	case int:
 		foundInt := int64(v)
 		foundMatcher = &IntegerMatcher{
-			Value:  &foundInt,
-			Exists: true,
+			Value:    &foundInt,
+			Exists:   true,
+			Priority: DEFAULT_PRIORITY,
 		}
 	case bool:
 		foundMatcher = &BoolMatcher{
-			Value:  &v,
-			Exists: true,
+			Value:    &v,
+			Exists:   true,
+			Priority: DEFAULT_PRIORITY,
 		}
 	case []interface{}:
 		defaultLength := NotEmpty
@@ -1024,6 +1034,7 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 			Items:     v,
 			Exists:    true,
 			Sorted:    true,
+			Priority:  DEFAULT_PRIORITY,
 		}
 	case map[interface{}]interface{}:
 		if err := r.loadObjectFields(v, v, paths); err != nil {
@@ -1168,8 +1179,8 @@ func (r *ResponseMatcher) SortConfigs() {
 	sort.Slice(configs, func(i, j int) bool {
 		a := configs[i]
 		b := configs[j]
-		return len(a.ObjectKeyPath.Keys) <= len(b.ObjectKeyPath.Keys) &&
-			a.Matcher.GetPriority() <= b.Matcher.GetPriority()
+		return a.Matcher.GetPriority() <= b.Matcher.GetPriority() && len(a.ObjectKeyPath.Keys) <= len(b.ObjectKeyPath.Keys)
+
 	})
 	r.Config = configs
 }
@@ -1226,23 +1237,20 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 		pathStr := ""
 
 		// look up any cached nodes from the most specific path to the most generic
-		keys := matcher.ObjectKeyPath.Keys[:]
+		nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - 1)
 		distance := 0
-		for i, _ := range matcher.ObjectKeyPath.Keys {
-			nodePath := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - i)
+		for nodePath != "" && len(matcher.ObjectKeyPath.Keys)-1-distance >= 0 {
 			if cachedNode, ok := sharedNodes[nodePath]; ok {
 				node = cachedNode.Node
 				if distance == 0 {
 					// exact node match means we can skip trying to iterate on its sub nodes below
 					keys = []FieldPathKey{}
-				} else {
-					keys = keys[cachedNode.PathIndex:]
 				}
 				break
 			}
 			distance++
+			nodePath, keys = matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - 1 - distance)
 		}
-
 		_, isObjMatcher := matcher.Matcher.(*ObjectMatcher)
 
 		// If we are looking for an object in an unsorted array, we need to locate the object using the
@@ -1262,7 +1270,7 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 			continue
 		}
 
-		for pathIndex, p := range keys {
+		for _, p := range keys {
 			switch t := node.(type) {
 			case map[string]interface{}:
 				if tempNode, ok := t[p.Key]; ok {
@@ -1296,10 +1304,9 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 						// add all parent nodes leading up to the result to our cafmt.che so we can
 						// look them up without having to search again.
 						for i, chainNode := range result.NodeChain {
-							cachepath := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
+							cachepath, _ := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
 							sharedNodes[cachepath] = NodeCacheObj{
-								Node:      chainNode.Node,
-								PathIndex: pathIndex,
+								Node: chainNode.Node,
 							}
 						}
 					} else {
