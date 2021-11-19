@@ -23,6 +23,7 @@ const (
 	WS_ENC_HEX      = "hex"
 	WS_ENC_FILE     = "file"
 	WS_ENC_EXTERNAL = "external"
+	WS_RESPONSE     = "responses"
 
 	WS_MSG_TEXT = "text"
 	WS_MSG_JSON = "json"
@@ -237,7 +238,7 @@ func executeWebSocket(test *TestCase, result *TestResult, input interface{}, ste
 
 	if result.Response == nil {
 		result.Response = make(map[string]interface{})
-		result.Response["responses"] = make([]interface{}, 0)
+		result.Response[WS_RESPONSE] = make([]interface{}, 0)
 	}
 
 	if step >= 0 && step < len(inputs.Requests) {
@@ -288,7 +289,7 @@ func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, resul
 			}
 		}
 
-		result.Response["responses"] = append(result.Response["responses"].([]interface{}), subRespJson)
+		result.Response[WS_RESPONSE] = append(result.Response[WS_RESPONSE].([]interface{}), subRespJson)
 	}
 	return nil
 }

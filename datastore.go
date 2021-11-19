@@ -6,18 +6,17 @@ import (
 	"strings"
 )
 
+const (
+	VAR_PREFIX = "@{"
+	VAR_SUFFIX = "}"
+)
+
 type DataStore map[string]interface{}
 
-type VarStackFrame struct {
-	StartPos int
-	EndPos   int
-	VarName  string
-	Nested   int
-}
-
-type VarStack struct {
-	Frames []VarStackFrame
-	Extra  string
+type VariableKey struct {
+	Name    string
+	IsArray bool
+	IsLast  bool
 }
 
 func varToString(variable interface{}, def ...string) string {
@@ -31,114 +30,220 @@ func varToString(variable interface{}, def ...string) string {
 	return fmt.Sprintf("%v", variable)
 }
 
-func (s *VarStack) Push(f VarStackFrame) {
-	s.Frames = append(s.Frames, f)
-}
-
-func (s *VarStack) Pop() *VarStackFrame {
-	if len(s.Frames) == 0 {
-		return nil
-	}
-	result := s.Frames[len(s.Frames)-1]
-	s.Frames = s.Frames[:len(s.Frames)-1]
-	return &result
-}
-
-func (f *VarStackFrame) IsValid() bool {
-	return f.StartPos != f.EndPos && f.VarName != ""
-}
-
-func parseVar(input string) VarStack {
-	varStack := VarStack{}
-	resultStack := VarStack{}
-	var curStackFrame *VarStackFrame
-	for i := 0; i < len(input); i++ {
-		char := input[i]
-		if char == '@' && i+1 < len(input) && input[i+1] == '{' {
-			nestLevel := 0
-			if curStackFrame != nil {
-				varStack.Push(*curStackFrame)
-				nestLevel = curStackFrame.Nested + 1
-			}
-			curStackFrame = &VarStackFrame{}
-			curStackFrame.StartPos = i
-			curStackFrame.Nested = nestLevel
-		} else if curStackFrame != nil && char == '}' {
-			curStackFrame.EndPos = i
-			curStackFrame.VarName = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
-			resultStack.Push(*curStackFrame)
-			curStackFrame = varStack.Pop()
-		} else if curStackFrame == nil {
-			resultStack.Extra += string(char)
-		}
-	}
-
-	return resultStack
-}
-
-func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
-	keys := strings.Split(variable, ".")
+func extractVariablePath(variableName string) []VariableKey {
+	keys := strings.Split(variableName, ".")
 
 	// Extract array indexing from the keys as their own key for iterating the datastore.
-	var expandedKeys []string
+	var expandedKeys []VariableKey
 	for _, k := range keys {
 		hasIndex := false
 		index := ""
 		for i, c := range k {
 			if c == '[' {
+				if hasIndex {
+					index = ""
+				} else {
+					expandedKeys = append(expandedKeys, VariableKey{Name: k[:i], IsArray: true})
+				}
 				hasIndex = true
-				expandedKeys = append(expandedKeys, k[:i])
+
 				continue
 			}
 
 			if c != ']' && hasIndex {
 				index += string(c)
 			} else if c == ']' {
-				expandedKeys = append(expandedKeys, index)
+				expandedKeys = append(expandedKeys, VariableKey{Name: index})
 			}
 		}
 		if !hasIndex {
-			expandedKeys = append(expandedKeys, k)
+			expandedKeys = append(expandedKeys, VariableKey{Name: k})
 		}
 	}
+	expandedKeys[len(expandedKeys)-1].IsLast = true
+
+	return expandedKeys
+}
+
+func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
+	// Extract array indexing from the keys as their own key for iterating the datastore.
+	cleanedVar := variable[len(VAR_PREFIX) : len(variable)-len(VAR_SUFFIX)]
+	expandedKeys := extractVariablePath(cleanedVar)
 
 	var node interface{}
 	node = *t
 	for _, k := range expandedKeys {
+		key := k.Name
 		switch v := node.(type) {
 		case DataStore:
-			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, variable)
+			if nextNode, ok := v[key]; !ok {
+				return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
 			} else {
 				node = nextNode
 			}
 		case map[string]interface{}:
-			if nextNode, ok := v[k]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, variable)
+			if nextNode, ok := v[key]; !ok {
+				return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
 			} else {
 				node = nextNode
 			}
 		case []interface{}:
-			idx, err := strconv.ParseUint(k, 10, 64)
+			idx, err := strconv.ParseUint(key, 10, 64)
 			if err != nil {
 				// should catch non integer and negative value
-				return "", fmt.Errorf(BadIndexDSFmt, variable)
+				return "", fmt.Errorf(BadIndexDSFmt, cleanedVar)
 			}
 			if idx > uint64(len(v)) {
-				return "", fmt.Errorf(IndexExceedsDSFmt, variable)
+				return "", fmt.Errorf(IndexExceedsDSFmt, cleanedVar)
 			}
 
 			node = v[idx]
+		default:
+			return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
 		}
 	}
 
 	return node, nil
 }
 
+// PutVariable Given a variable name (or path in a JSON object) store the value for said path.
+func (t *DataStore) PutVariable(variable string, value interface{}) error {
+	type Noodle struct {
+		Parent      interface{}
+		Node        interface{}
+		ParentKey   string
+		ParentIndex int64
+	}
+
+	expandedKeys := extractVariablePath(variable)
+	node := Noodle{
+		Node:   *t,
+		Parent: *t,
+	}
+
+	for _, k := range expandedKeys {
+		key := k.Name
+		var temp interface{}
+		switch v := node.Node.(type) {
+		case DataStore:
+			if nextNode, ok := v[key]; !ok {
+				// insert values if it doesn't exist
+				if k.IsLast {
+					v[key] = value
+					return nil
+				} else if k.IsArray {
+					temp = make([]interface{}, 1)
+				} else {
+					temp = make(map[string]interface{})
+				}
+				v[key] = temp
+				node = Noodle{
+					Node:        temp,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			} else {
+				// otherwise overwrite existing ones
+				if k.IsLast {
+					v[key] = value
+					return nil
+				}
+				node = Noodle{
+					Node:        nextNode,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			}
+		case map[string]interface{}:
+			if nextNode, ok := v[key]; !ok {
+				if k.IsLast {
+					v[key] = value
+					return nil
+				} else if k.IsArray {
+					temp = make([]interface{}, 1)
+				} else {
+					temp = make(map[string]interface{})
+				}
+				v[key] = temp
+				node = Noodle{
+					Node:        temp,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			} else {
+				// otherwise overwrite existing ones
+				if k.IsLast {
+					v[key] = value
+					return nil
+				}
+				node = Noodle{
+					Node:        nextNode,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			}
+		case []interface{}:
+			idx, err := strconv.ParseUint(key, 10, 64)
+			if err != nil {
+				return fmt.Errorf(BadIndexDSFmt, variable)
+			}
+			// if the index is out of range, then we'll resize the array just enough to fix the index
+			if idx > uint64(len(v)) {
+				newArray := v[:]
+				delta := (idx - uint64(len(v))) + 1
+				for delta > 0 {
+					delta--
+					newArray = append(newArray, nil)
+
+				}
+				if node.ParentKey != "" {
+					n := node.Parent.(*map[string]interface{})
+					(*n)[node.ParentKey] = newArray
+				} else if node.ParentIndex >= 0 {
+					n := node.Parent.(*[]interface{})
+					(*n)[node.ParentIndex] = newArray
+				}
+				v = newArray
+			}
+			if v[idx] == nil {
+				if k.IsLast {
+					v[idx] = value
+					return nil
+				} else if k.IsArray {
+					temp = make([]interface{}, 1)
+				} else {
+					temp = make(map[string]interface{})
+				}
+				v[idx] = temp
+			} else {
+				if k.IsLast {
+					v[idx] = value
+					return nil
+				}
+			}
+			node = Noodle{
+				Node:        v[idx],
+				Parent:      &v,
+				ParentIndex: int64(idx),
+			}
+		}
+	}
+	return nil
+}
+
+func isVar(input string) bool {
+	return strings.HasPrefix(input, VAR_PREFIX) && strings.HasSuffix(input, VAR_SUFFIX)
+}
+
 func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 	var result interface{}
 	var outputString string
-	variables := parseVar(input)
+	variables := TokenStack{}
+	variables.Parse(input, VAR_PREFIX, VAR_SUFFIX)
 
 	if len(variables.Frames) == 0 {
 		return input, nil
@@ -149,26 +254,25 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 	}
 
 	type ExtendedStackFrame struct {
-		VarStackFrame
+		TokenStackFrame
 		ResolvedVarName string
 	}
 
 	toResolve := []ExtendedStackFrame{}
 	for _, v := range variables.Frames {
 		toResolve = append(toResolve, ExtendedStackFrame{
-			VarStackFrame:   v,
-			ResolvedVarName: v.VarName,
+			TokenStackFrame: v,
+			ResolvedVarName: v.Token,
 		})
 	}
 
 	for i, v := range toResolve {
 		var resolvedVar interface{}
-		// make sure we are only resolving strings that are variables and not strings that were already resolved from
+		// make sure we are only resolving strings that are variables and not values that were already resolved from
 		// variables.
-		if strings.HasPrefix(v.ResolvedVarName, "@{") && strings.HasSuffix(v.ResolvedVarName, "}") {
+		if isVar(v.ResolvedVarName) {
 			var err error
-			varKey := strings.ReplaceAll(strings.ReplaceAll(v.ResolvedVarName, "@{", ""), "}", "")
-			resolvedVar, err = t.resolveVariable(varKey)
+			resolvedVar, err = t.resolveVariable(v.ResolvedVarName)
 			if err != nil {
 				return nil, err
 			}
@@ -178,7 +282,7 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 			// if the input contains more text than just the variable, we can assume that it is intended to be replaced
 			// within the string
 			if outputString != "" {
-				outputString = strings.ReplaceAll(outputString, v.VarName, varToString(resolvedVar))
+				outputString = strings.ReplaceAll(outputString, v.Token, varToString(resolvedVar))
 			} else {
 				// otherwise, just return the node and it'll be converted as needed
 				result = resolvedVar
@@ -188,16 +292,16 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 		for offset := i + 1; offset < len(toResolve); offset++ {
 			frame := toResolve[offset]
 
-			if !strings.Contains(frame.ResolvedVarName, v.VarName) {
+			if !strings.Contains(frame.ResolvedVarName, v.Token) {
 				continue
 			}
 
 			if _, ok := resolvedVar.(string); !ok {
-				return nil, fmt.Errorf("failed to resolve %v as %v does not resolve to a string: %v", frame.VarName, v.VarName, resolvedVar)
+				return nil, fmt.Errorf("failed to resolve %v as %v does not resolve to a string: %v", frame.Token, v.Token, resolvedVar)
 			}
 			// Assumes that people's variables are resolving to proper strings. If not, then they'll get a message
 			// indicating their variable couldn't be resolved anyway.
-			frame.ResolvedVarName = strings.ReplaceAll(frame.ResolvedVarName, v.VarName, varToString(resolvedVar))
+			frame.ResolvedVarName = strings.ReplaceAll(frame.ResolvedVarName, v.Token, varToString(resolvedVar))
 			toResolve[offset] = frame
 		}
 
@@ -209,7 +313,7 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 	return result, nil
 }
 
-func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}, error) {
+func (t *DataStore) RecursiveResolveVariables(input interface{}) (interface{}, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -217,7 +321,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 	switch n := input.(type) {
 	case map[interface{}]interface{}:
 		for k := range n {
-			if node, err := t.resolveDataStoreVarRecursive(n[k]); err != nil {
+			if node, err := t.RecursiveResolveVariables(n[k]); err != nil {
 				return nil, err
 			} else {
 				n[k] = node
@@ -227,7 +331,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 		return n, nil
 	case map[string]interface{}:
 		for k := range n {
-			if node, err := t.resolveDataStoreVarRecursive(n[k]); err != nil {
+			if node, err := t.RecursiveResolveVariables(n[k]); err != nil {
 				return nil, err
 			} else {
 				n[k] = node
@@ -237,7 +341,7 @@ func (t *DataStore) resolveDataStoreVarRecursive(input interface{}) (interface{}
 		return n, nil
 	case []interface{}:
 		for i, e := range n {
-			if node, err := t.resolveDataStoreVarRecursive(e); err != nil {
+			if node, err := t.RecursiveResolveVariables(e); err != nil {
 				return nil, err
 			} else {
 				n[i] = node

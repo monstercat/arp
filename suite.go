@@ -48,7 +48,6 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	}
 
 	status, err := suite.LoadTests(testFile, fixtures)
-
 	if !status && err == nil {
 		return nil, nil
 	} else if err != nil {

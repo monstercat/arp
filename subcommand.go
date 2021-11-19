@@ -6,71 +6,18 @@ import (
 	"strings"
 )
 
-type CommandStackFrame struct {
-	StartPos    int
-	EndPos      int
-	CommandLine string
-	Nested      int
-}
-
-type CommandStack struct {
-	Frames []CommandStackFrame
-	Extra  string
-}
-
-func (s *CommandStack) Push(f CommandStackFrame) {
-	s.Frames = append(s.Frames, f)
-}
-
-func (s *CommandStack) Pop() *CommandStackFrame {
-	if len(s.Frames) == 0 {
-		return nil
-	}
-	result := s.Frames[len(s.Frames)-1]
-	s.Frames = s.Frames[:len(s.Frames)-1]
-	return &result
-}
-
-func (f *CommandStackFrame) IsValid() bool {
-	return f.StartPos != f.EndPos && f.CommandLine != ""
-}
-
-func parseCommands(input string) CommandStack {
-	varStack := CommandStack{}
-	resultStack := CommandStack{}
-	var curStackFrame *CommandStackFrame
-	for i := 0; i < len(input); i++ {
-		char := input[i]
-		if char == '$' && i+1 < len(input) && input[i+1] == '(' {
-			nestLevel := 0
-			if curStackFrame != nil {
-				varStack.Push(*curStackFrame)
-				nestLevel = curStackFrame.Nested + 1
-			}
-			curStackFrame = &CommandStackFrame{}
-			curStackFrame.StartPos = i
-			curStackFrame.Nested = nestLevel
-		} else if curStackFrame != nil && char == ')' {
-			curStackFrame.EndPos = i
-			curStackFrame.CommandLine = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
-			resultStack.Push(*curStackFrame)
-			curStackFrame = varStack.Pop()
-		} else if curStackFrame == nil {
-			resultStack.Extra += string(char)
-		}
-	}
-
-	return resultStack
-}
+const (
+	CMD_PREFIX = "$("
+	CMD_SUFFIX = ")"
+)
 
 func executeCommandStr(input string) (string, error) {
 	var tokens []string
-
 	inQuote := false
 	argStartPos := 0
 	escaped := false
 
-	realCmd := input[2 : len(input)-1]
+	realCmd := input[len(CMD_PREFIX) : len(input)-len(CMD_SUFFIX)]
 	for i := 0; i < len(realCmd) && argStartPos < len(realCmd); i++ {
 		char := realCmd[i]
 
@@ -167,31 +114,36 @@ func executeCommandStr(input string) (string, error) {
 	return strings.TrimSuffix(string(val), "\n"), err
 }
 
+func isCmd(input string) bool {
+	return strings.HasPrefix(input, CMD_PREFIX) && strings.HasSuffix(input, CMD_SUFFIX)
+}
+
 func ExecuteCommand(input string) (interface{}, error) {
 	var outputString = input
-	commands := parseCommands(input)
+	commands := TokenStack{}
+	commands.Parse(input, CMD_PREFIX, CMD_SUFFIX)
 
 	if len(commands.Frames) == 0 {
 		return input, nil
 	}
 
 	type ExtendedStackFrame struct {
-		CommandStackFrame
+		TokenStackFrame
 		ExecuteCommandResult string
 	}
 
 	toExecute := []ExtendedStackFrame{}
 	for _, v := range commands.Frames {
 		toExecute = append(toExecute, ExtendedStackFrame{
-			CommandStackFrame:    v,
-			ExecuteCommandResult: v.CommandLine,
+			TokenStackFrame:      v,
+			ExecuteCommandResult: v.Token,
 		})
 	}
 
 	for i, v := range toExecute {
 		var commandOutput string
 		// make sure we are executing commands and not the results of commands that were already executed
-		if strings.HasSuffix(v.ExecuteCommandResult, "$(") && strings.HasPrefix(v.ExecuteCommandResult, ")") {
+		if isCmd(v.ExecuteCommandResult) {
 			var err error
 			commandOutput, err = executeCommandStr(v.ExecuteCommandResult)
 			if err != nil {
@@ -201,16 +153,16 @@ func ExecuteCommand(input string) (interface{}, error) {
 		}
 
 		if v.Nested == 0 {
-			outputString = strings.ReplaceAll(outputString, v.CommandLine, commandOutput)
+			outputString = strings.ReplaceAll(outputString, v.Token, commandOutput)
 		}
 		// once a command is executed, we want to populate the parent command stack frames with the text result in place
 		// of this nested command.
 		for offset := i + 1; offset < len(toExecute); offset++ {
 			frame := toExecute[offset]
-			if !strings.Contains(frame.ExecuteCommandResult, v.CommandLine) {
+			if !strings.Contains(frame.ExecuteCommandResult, v.Token) {
 				continue
 			}
-			frame.ExecuteCommandResult = strings.ReplaceAll(frame.ExecuteCommandResult, v.CommandLine, commandOutput)
+			frame.ExecuteCommandResult = strings.ReplaceAll(frame.ExecuteCommandResult, v.Token, commandOutput)
 			toExecute[offset] = frame
 		}
 
@@ -233,7 +185,6 @@ func RecursiveExecuteCommand(input interface{}) (interface{}, error) {
 			} else {
 				n[k] = node
 			}
-
 		}
 		return n, nil
 	case map[string]interface{}:
@@ -243,7 +194,6 @@ func RecursiveExecuteCommand(input interface{}) (interface{}, error) {
 			} else {
 				n[k] = node
 			}
-
 		}
 		return n, nil
 	case []interface{}:
@@ -254,7 +204,6 @@ func RecursiveExecuteCommand(input interface{}) (interface{}, error) {
 				n[i] = node
 			}
 		}
-
 		return n, nil
 	case []string:
 		var newElements []interface{}

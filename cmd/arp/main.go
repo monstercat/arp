@@ -85,7 +85,7 @@ func (p *ProgramArgs) Init() {
 	}
 }
 
-func populateDataStore(ds *DataStore, vars varFlags) {
+func populateDataStore(ds *DataStore, vars varFlags) error {
 	(*ds)["host"] = "http://localhost"
 	for _, v := range vars {
 		pair := strings.SplitN(v, "=", 2)
@@ -94,8 +94,11 @@ func populateDataStore(ds *DataStore, vars varFlags) {
 			fmt.Printf("Badly formatted var excluded from test data store: %v\n", v)
 			continue
 		}
-		(*ds)[pair[0]] = pair[1]
+		if err := (*ds).PutVariable(pair[0], pair[1]); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func runTests(args ProgramArgs) bool {
@@ -107,11 +110,15 @@ func runTests(args ProgramArgs) bool {
 	if *args.TestFile != "" {
 		suite, sErr := NewTestSuite(*args.TestFile, *args.Fixtures)
 		if sErr != nil {
-			fmt.Printf("%v\n", sErr)
-			return false
+			err = sErr
+			goto DIE
 		}
+
 		suite.Verbose = true
-		populateDataStore(&suite.GlobalDataStore, args.Variables)
+		if dsErr := populateDataStore(&suite.GlobalDataStore, args.Variables); dsErr != nil {
+			err = dsErr
+			goto DIE
+		}
 
 		r := MultiSuiteResult{
 			TestFile: *args.TestFile,
@@ -124,17 +131,18 @@ func runTests(args ProgramArgs) bool {
 		var multiTestSuite *MultiTestSuite
 		multiTestSuite, err = NewMultiSuiteTest(*args.TestRoot, *args.Fixtures)
 		if err != nil {
-			fmt.Printf("%v\n", err)
-			os.Exit(1)
+			goto DIE
 		}
 
 		for _, suite := range multiTestSuite.Suites {
-			populateDataStore(&suite.GlobalDataStore, args.Variables)
+			if err = populateDataStore(&suite.GlobalDataStore, args.Variables); err != nil {
+				goto DIE
+			}
 		}
-
 		passed, results, testingDuration, err = multiTestSuite.ExecuteTests(*args.Threads, args.Tags)
 	}
 
+DIE:
 	if err != nil {
 		fmt.Printf("Failed to execute tests: %v\n", err)
 		os.Exit(1)

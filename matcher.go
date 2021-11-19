@@ -341,7 +341,7 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 	}
 
 	if status && m.DSName != "" {
-		store[m.DSName] = responseValue
+		err = store.PutVariable(m.DSName, responseValue)
 	}
 
 	return status, store, err
@@ -427,7 +427,7 @@ func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	}
 
 	if status && m.DSName != "" {
-		store[m.DSName] = responseValue
+		err = store.PutVariable(m.DSName, responseValue)
 	}
 
 	return status, store, err
@@ -510,7 +510,7 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 	}
 
 	if status && m.DSName != "" {
-		store[m.DSName] = responseValue
+		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
 }
@@ -588,7 +588,7 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 		m.ErrorStr = typedResponseValue
 	}
 	if status && m.DSName != "" {
-		store[m.DSName] = responseValue
+		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
 }
@@ -717,7 +717,7 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	}
 
 	if status && m.DSName != "" {
-		store[m.DSName] = responseValue
+		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
 }
@@ -751,6 +751,7 @@ func (m *ObjectMatcher) Parse(parentNode interface{}, node map[interface{}]inter
 }
 
 func (m *ObjectMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
+	var err error
 	store := DataStore{}
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
@@ -770,10 +771,10 @@ func (m *ObjectMatcher) Match(responseValue interface{}, datastore *DataStore) (
 	m.ErrorStr = "{}"
 
 	if m.DSName != "" {
-		store[m.DSName] = typedResponseValue
+		err = store.PutVariable(m.DSName, typedResponseValue)
 	}
 
-	return true, store, nil
+	return true, store, err
 }
 
 func (m *ObjectMatcher) Error() string {
@@ -842,7 +843,8 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 
 	// immediately store value into datastore so it can be resolved as a variable for program inputs
 	if m.DSName != "" {
-		(*datastore)[m.DSName] = typedResponseValue
+		//(*datastore)[m.DSName] = typedResponseValue
+		(*datastore).PutVariable(m.DSName, typedResponseValue)
 	}
 
 	resolvedBinPath, err := datastore.ExpandVariable(m.BinPath)
@@ -851,7 +853,7 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 	}
 
 	// resolve variables in the program
-	resolvedArgs, argErr := datastore.resolveDataStoreVarRecursive(m.PrgmArgs)
+	resolvedArgs, argErr := datastore.RecursiveResolveVariables(m.PrgmArgs)
 	if argErr != nil {
 		return false, nil, fmt.Errorf(BadVarMatcherFmt, m.PrgmArgs)
 	}

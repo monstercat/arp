@@ -187,7 +187,7 @@ func (t *TestCase) GetTestRpcAddr() (string, error) {
 
 // Returns a new input object with all included variables resolved
 func (t *TestCase) GetResolvedTestInput() (interface{}, error) {
-	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Config.Input)
+	node, err := t.GlobalDataStore.RecursiveResolveVariables(t.Config.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (t *TestCase) GetResolvedTestInput() (interface{}, error) {
 }
 
 func (t *TestCase) GetTestHeaders(inputReader *InputReader) (map[interface{}]interface{}, error) {
-	node, err := t.GlobalDataStore.resolveDataStoreVarRecursive(t.Config.Headers)
+	node, err := t.GlobalDataStore.RecursiveResolveVariables(t.Config.Headers)
 	if err != nil {
 		return nil, err
 	}

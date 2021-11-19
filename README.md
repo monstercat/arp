@@ -1203,7 +1203,7 @@ arp -file=./tests.yaml -tag=read,write -tag=local
 ## Data Storage
 
 Each *Test Suite* has its own isolated data store that the tests can read and write variables to. Variables are read using `@{myVarName}` notation, and are
-saved using the `storeAs` property on your field matcher.  
+saved using the `storeAs` property on your field matcher. 
 
 Variables can only be referenced in the following test definition fields:
 * input
@@ -1295,6 +1295,30 @@ For example, if we wanted to store the ID  of the user Charles from the sample t
 
 ![DFS Store](./.github/images/demo2.gif)
 
+### Variable Syntax
+
+Variables support JSON dot-like syntax for storing and reading from the data store. 
+If a write is made to an object or path that doesn't exist in the data store, the required data structures will be automatically created
+
+E.g. 
+
+```yaml
+# Storing a value
+    id:
+      type: integer
+      matches: $any
+      storeAs: someObj.someArray[3].Id
+
+---
+# Using the stored value    
+    response:
+      payload:
+        data:
+          type: object
+          properties:
+            id: '@{someObj.someArray[3].Id}'
+```
+
 
 ### Fixtures
 
@@ -1343,6 +1367,56 @@ Alternatively, you can provide variables with one or more `-var` input parameter
 
 ```bash
 ./arp -test-root=. -var='MY_API_TOKEN=adfadfadfadfa' -var='SOMETHING_ELSE=not the token'
+```
+
+These are added to the data store AFTER the fixtures file has been loaded for each test suite. This allows you to override values in
+the fixture file with a runtime value instead.
+
+```yaml
+# fixtures.yaml
+SomeData:
+  WithAnArray:
+    - AnotherObj:
+        MyValue: Override This
+
+```
+
+```bash
+./arp -test-root=. -fixtures=fixtures.yaml -var='SomeData.WithAnArray[0].AnotherObj.MyValue=Overwritten!'
+```
+
+
+
+If the target JSON path doesn't exist, empty structures leading to the value will be automatically created:
+```yaml
+SomeData:
+  DontUseThis:
+    - Nothing
+```
+
+```bash
+./arp -test-root=. -var='SomeData.SomeMapping.UseThisInstead[5].Value=Hello'
+```
+
+results in:
+```
+@{SomeData} -> {
+ "DontUseThis": [
+  "Nothing"
+ ],
+ "SomeMapping": {
+  "UseThisInstead": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   {
+    "Value": "Hello"
+   }
+  ]
+ }
+}
 ```
 
 
