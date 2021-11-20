@@ -11,6 +11,7 @@ type ReportOptions struct {
 	ShortErrors        bool
 	Short              bool
 	Tiny               bool
+	Micro              bool
 	AlwaysPrintHeaders bool
 	ErrorsOnly         bool
 	TestsPath          string
@@ -275,23 +276,25 @@ func PrintReport(opts ReportOptions, passed bool, testingDuration time.Duration,
 		globalPassed += r.TestResults.Passed
 		globalTestDuration += r.TestResults.Duration
 
-		PrintIndentedLn(0, "[%v] %v\n", getSuccessString(opts.Colors, r.Passed, ""),
-			opts.Colors.Underline(opts.Colors.BrightWhite(r.TestFile)))
-		PrintIndentedLn(1, "Suite Duration: %v\n", r.TestResults.Duration)
-		PrintIndentedLn(1, "Passed: %v, Failed: %v, Total:%v\n", r.TestResults.Passed,
-			r.TestResults.Failed, r.TestResults.Total)
+		if !opts.Micro {
+			PrintIndentedLn(0, "[%v] %v\n", getSuccessString(opts.Colors, r.Passed, ""),
+				opts.Colors.Underline(opts.Colors.BrightWhite(r.TestFile)))
+			PrintIndentedLn(1, "Suite Duration: %v\n", r.TestResults.Duration)
+			PrintIndentedLn(1, "Passed: %v, Failed: %v, Total:%v\n", r.TestResults.Passed,
+				r.TestResults.Failed, r.TestResults.Total)
 
-		fmt.Printf("%v\n", separator(opts.Colors))
+			fmt.Printf("%v\n", separator(opts.Colors))
 
-		for _, test := range r.TestResults.Results {
-			if ShouldShowReport(opts, test) {
-				PrintSingleTestReport(opts, test)
+			for _, test := range r.TestResults.Results {
+				if ShouldShowReport(opts, test) {
+					PrintSingleTestReport(opts, test)
+				}
 			}
-		}
 
-		if r.Error != nil {
-			PrintIndentedLn(1, opts.Colors.BrightRed("One or more tests failed within execution and the test suite could not be completed:\n"))
-			PrintIndentedLn(1, "%q\n\n", r.Error)
+			if r.Error != nil {
+				PrintIndentedLn(1, opts.Colors.BrightRed("One or more tests failed within execution and the test suite could not be completed:\n"))
+				PrintIndentedLn(1, "%q\n\n", r.Error)
+			}
 		}
 	}
 

@@ -41,6 +41,7 @@ type ProgramArgs struct {
 	Threads      *int
 	Short        *bool
 	Tiny         *bool
+	Micro        *bool
 	ShortErrors  *bool
 	ErrorsOnly   *bool
 	PrintHeaders *bool
@@ -58,6 +59,7 @@ func (p *ProgramArgs) Init() {
 	p.TestFile = flag.String("file", "", "Path to an individual test file to execute.")
 	p.Fixtures = flag.String("fixtures", "", "Path to yaml file with data to include into the test scope via test variables. "+
 		"This file is also merged with each test file such that any YAML anchors defined within it are available for reference in the test files.")
+	p.Micro = flag.Bool("micro", false, "Print out the smallest test report possible for a multi-test suite run.")
 	p.Short = flag.Bool("short", true, "Print a short report for executed tests containing only the validation results.")
 	p.ShortErrors = flag.Bool("short-fail", false, "Keep the report short when errors are encountered rather than expanding with details.")
 	p.Interactive = flag.Bool("step", false, "Run tests in interactive mode. Requires a test file to be provided with '-file'")
@@ -165,6 +167,7 @@ DIE:
 		TestsPath:          path,
 		AlwaysPrintHeaders: *args.PrintHeaders,
 		ErrorsOnly:         *args.ErrorsOnly,
+		Micro:              *args.Micro,
 		Colors: Colorizer{
 			Enabled: *args.Colorize,
 		},
@@ -286,6 +289,7 @@ func interactiveMode(args ProgramArgs) bool {
 		Short:              *args.Short,
 		TestsPath:          *args.TestFile,
 		AlwaysPrintHeaders: *args.PrintHeaders,
+		Micro:              *args.Micro,
 		Colors: Colorizer{
 			Enabled: *args.Colorize,
 		},

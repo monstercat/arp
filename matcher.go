@@ -1239,7 +1239,7 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 		pathStr := ""
 
 		// look up any cached nodes from the most specific path to the most generic
-		nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - 1)
+		nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys))
 		distance := 0
 		for nodePath != "" && len(matcher.ObjectKeyPath.Keys)-1-distance >= 0 {
 			if cachedNode, ok := sharedNodes[nodePath]; ok {

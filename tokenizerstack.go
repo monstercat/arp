@@ -1,6 +1,8 @@
 package arp
 
-import "strings"
+import (
+	"strings"
+)
 
 type TokenStackFrame struct {
 	StartPos int
@@ -43,7 +45,7 @@ func (s *TokenStack) Parse(input string, prefix string, suffix string) {
 			curStackFrame = &TokenStackFrame{}
 			curStackFrame.StartPos = i
 			curStackFrame.Nested = nestLevel
-		} else if strings.HasPrefix(input[i:], suffix) {
+		} else if curStackFrame != nil && strings.HasPrefix(input[i:], suffix) {
 			curStackFrame.EndPos = i + len(suffix) - 1
 			curStackFrame.Token = input[curStackFrame.StartPos : curStackFrame.EndPos+1]
 			s.Push(*curStackFrame)
