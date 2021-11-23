@@ -206,6 +206,11 @@ func (t *TestCase) GetTestHeaders(inputReader *InputReader) (map[interface{}]int
 		return nil, err
 	}
 
+	node, err = RecursiveExecuteCommand(node)
+	if err != nil {
+		return nil, err
+	}
+
 	headersMap, ok := node.(map[interface{}]interface{})
 	if !ok {
 		return nil, fmt.Errorf("failed to load headers for test - expected an object")

@@ -82,10 +82,16 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	var response *http.Response
 	var route string
 	var err error
+	var requestInputReader io.Reader = nil
+	var requestInput *InputReader = nil
 
-	requestInput, err := test.GetRestInput(input)
-	if err != nil {
-		return fmt.Errorf("failed to setup test input: %v", err)
+	if test.Config.Method != "GET" {
+		requestInput, err = test.GetRestInput(input)
+		if err != nil {
+			return fmt.Errorf("failed to setup test input: %v", err)
+		}
+
+		requestInputReader = requestInput.BodyReader
 	}
 
 	route, err = test.GetTestRoute()
@@ -94,7 +100,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	}
 	result.ResolvedRoute = route
 
-	request, err = http.NewRequest(test.Config.Method, result.ResolvedRoute, requestInput.BodyReader)
+	request, err = http.NewRequest(test.Config.Method, result.ResolvedRoute, requestInputReader)
 	if err != nil {
 		return fmt.Errorf("failed to initialize http request: %v", err)
 	}
@@ -112,7 +118,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 
 	result.RequestHeaders = request.Header
 	response, err = client.Do(request)
-	if requestInput.ErrorChan != nil {
+	if requestInput != nil && requestInput.ErrorChan != nil {
 		if inputErr := <-requestInput.ErrorChan; inputErr != nil {
 			return fmt.Errorf("request input failure: %v", inputErr)
 		}
@@ -141,7 +147,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 				var rErr error
 				responseData, rErr = ioutil.ReadAll(response.Body)
 				if rErr != nil {
-					return fmt.Errorf("failed to fetch API response: %v", rErr)
+					return fmt.Errorf("failed to parse API response: %v", rErr)
 				}
 				break
 			}
