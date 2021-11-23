@@ -384,7 +384,7 @@ func interactiveMode(args ProgramArgs) bool {
 			loaded := false
 
 			for !loaded {
-				loaded, err = suite.ReloadFile(*args.TestFile, *args.Fixtures)
+				loaded, err = suite.ReloadFile(*args.Fixtures)
 				if err != nil {
 					fmt.Printf("Hot reload error: %v\nPlease correct your file then press 'enter' to reload...\n", err)
 					input := ""

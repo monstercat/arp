@@ -24,6 +24,7 @@ type TestSuiteCfg struct {
 }
 
 type TestSuite struct {
+	File            string
 	Tests           []*TestCase
 	GlobalDataStore DataStore
 	Verbose         bool
@@ -40,6 +41,7 @@ type SuiteResult struct {
 func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	suite := &TestSuite{
 		GlobalDataStore: DataStore{},
+		File:            testFile,
 	}
 
 	err := suite.InitializeDataStore(fixtures)
@@ -47,7 +49,7 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 		return suite, err
 	}
 
-	status, err := suite.LoadTests(testFile, fixtures)
+	status, err := suite.LoadTests(fixtures)
 	if !status && err == nil {
 		return nil, nil
 	} else if err != nil {
@@ -57,9 +59,9 @@ func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	return suite, nil
 }
 
-func (t *TestSuite) ReloadFile(testFile string, fixtures string) (bool, error) {
+func (t *TestSuite) ReloadFile(fixtures string) (bool, error) {
 	t.Tests = make([]*TestCase, 0)
-	return t.LoadTests(testFile, fixtures)
+	return t.LoadTests(fixtures)
 }
 
 func (t *TestSuite) InitializeDataStore(fixtures string) error {
@@ -115,7 +117,7 @@ func (t *TestSuite) Close() {
 	}
 }
 
-func (t *TestSuite) LoadTests(testFile string, fixtures string) (bool, error) {
+func (t *TestSuite) LoadTests(fixtures string) (bool, error) {
 	var readers []io.Reader
 
 	if fixtures != "" {
@@ -127,9 +129,9 @@ func (t *TestSuite) LoadTests(testFile string, fixtures string) (bool, error) {
 		readers = append(readers, fix)
 	}
 
-	tests, err := os.Open(testFile)
+	tests, err := os.Open(t.File)
 	if err != nil {
-		return false, fmt.Errorf("failed to open test file: %v - %v", testFile, err)
+		return false, fmt.Errorf("failed to open test file: %v - %v", t.File, err)
 	}
 	readers = append(readers, tests)
 
@@ -139,15 +141,15 @@ func (t *TestSuite) LoadTests(testFile string, fixtures string) (bool, error) {
 
 	data, err := io.ReadAll(multiReader)
 	if err != nil {
-		return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
+		return false, fmt.Errorf("failed to load test file: %v - %v", t.File, err)
 	}
-	t.GlobalDataStore["TEST_DIR"], _ = filepath.Abs(filepath.Dir(testFile))
+	t.GlobalDataStore["TEST_DIR"], _ = filepath.Abs(filepath.Dir(t.File))
 
 	var testSuiteCfg TestSuiteCfg
 
 	err = yaml.Unmarshal(data, &testSuiteCfg)
 	if err != nil {
-		return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
+		return false, fmt.Errorf("failed to load test file: %v - %v", t.File, err)
 	}
 
 	for _, test := range testSuiteCfg.Tests {
@@ -157,7 +159,7 @@ func (t *TestSuite) LoadTests(testFile string, fixtures string) (bool, error) {
 
 		err = tCase.LoadConfig(&test)
 		if err != nil {
-			return false, fmt.Errorf("failed to load test file: %v - %v", testFile, err)
+			return false, fmt.Errorf("failed to load test file: %v - %v", t.File, err)
 		}
 
 		t.Tests = append(t.Tests, &tCase)
@@ -176,7 +178,7 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 		Total:   len(t.Tests),
 	}
 
-	for _, test := range t.Tests {
+	for testIndex, test := range t.Tests {
 		if test.Config.ExitOnRun {
 			break
 		}
@@ -187,7 +189,8 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 
 		passed, results, err := test.Execute(testTags)
 		if err != nil {
-			fmt.Printf("<< Done: [Fail] %v\n", test.Config.Name)
+			fmt.Printf("<< Done: [Fail] %v -> %v\n", t.File, test.Config.Name)
+			suiteResults.Failed += len(t.Tests) - testIndex
 			return false, suiteResults, err
 		}
 
@@ -203,7 +206,7 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 			if !passed {
 				statusStr = "Fail"
 			}
-			fmt.Printf("<< Done: [%v] %v\n", statusStr, test.Config.Name)
+			fmt.Printf("<< Done: [%v] %v -> %v\n", statusStr, t.File, test.Config.Name)
 		}
 
 		suiteResults.Duration += results.EndTime.Sub(results.StartTime)

@@ -85,7 +85,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	var requestInputReader io.Reader = nil
 	var requestInput *InputReader = nil
 
-	if test.Config.Method != "GET" {
+	if strings.ToLower(test.Config.Method) != "get" {
 		requestInput, err = test.GetRestInput(input)
 		if err != nil {
 			return fmt.Errorf("failed to setup test input: %v", err)

@@ -126,6 +126,11 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 		t.Config.Method = "WS"
 	}
 
+	if t.Config.Method == "" {
+		// default to GET if nothing is provided
+		t.Config.Method = "GET"
+	}
+
 	// generate a mapping for tags to improve look up times
 	t.Tags = make(map[string]bool)
 	for _, tag := range t.Config.Tags {
