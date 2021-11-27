@@ -21,6 +21,9 @@ const (
 	CFG_TAGS          = "tags"
 	CFG_RESPONSE_CODE = "code"
 
+	CFG_RESPONSE_TYPE_BIN  = "binary"
+	CFG_RESPONSE_TYPE_JSON = "json"
+
 	// Mime types
 	MIME_JSON = "application/json"
 	MIME_TEXT = "text/plain"
@@ -44,7 +47,7 @@ type TestCaseRpcCfg struct {
 type TestCaseResponseCfg struct {
 	// status code could end up being either a number or an object defining a validation definition
 	StatusCode interface{}                 `yaml:"code"`
-	IsBinary   bool                        `yaml:"binary"`
+	Type       string                      `yaml:"type"`
 	FilePath   string                      `yaml:"filePath"`
 	Payload    map[interface{}]interface{} `yaml:"payload"`
 	Headers    map[interface{}]interface{} `yaml:"headers"`
@@ -123,6 +126,14 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
 	t.StatusCodeMatcher.DS = t.GlobalDataStore
 	t.Config = *test
+
+	switch t.Config.Response.Type {
+	case CFG_RESPONSE_TYPE_JSON, CFG_RESPONSE_TYPE_BIN:
+	case "":
+		t.Config.Response.Type = CFG_RESPONSE_TYPE_JSON
+	default:
+		return fmt.Errorf("Invalid 'response.type' specified for %v: %v", t.Config.Name, t.Config.Response.Type)
+	}
 
 	if t.Config.RPC.Address != "" && t.Config.RPC.Procedure != "" && t.Config.RPC.Protocol != "" {
 		t.IsRPC = true

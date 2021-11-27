@@ -154,8 +154,8 @@ tests:
     method: GET
     response:
       code: 200
-      # Set this to true so the binary payload can be formatted correctly for easy validation.
-      binary: true
+      # Set the response type to binary so the binary payload can be formatted correctly for easy validation.
+      type: binary
       # response will be saved to this file
       filePath: /tmp/myfile.zip
       payload:
@@ -246,7 +246,7 @@ tests:
       # in JSON that validation matchers can be applied to. This object representation includes things like size in bytes and 
       # sha256 sum of the data
       # Only available for HTTP and RPC response validation
-      binary: <bool>
+      type: binary | json
 
       # File path to save any binary response data to. This can be used in conjunction with form uploads to test 
       # downloading and uploading of files
@@ -827,8 +827,8 @@ tests:
     method: GET
     response:
       code: 200
-      # set this to true so the binary payload can be formatted correctly for easy validation
-      binary: true
+      # set the response type to binary so the binary payload can be formatted correctly for easy validation
+      type: binary
       # response will be saved to this file
       filePath: /tmp/myfile.zip
       payload:
@@ -1032,8 +1032,8 @@ tests:
     method: GET
     response:
       code: 200
-      # set this to true so the binary payload can be formatted correctly for easy validation
-      binary: true
+      # set the response type to binary so the binary payload can be formatted correctly for easy validation
+      type: binary
       # response will be saved to this file
       filePath: /tmp/myfile.zip
       payload:

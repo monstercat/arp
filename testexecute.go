@@ -74,6 +74,10 @@ type WsResponseJson struct {
 	Responses []map[string]interface{} `json:"responses"`
 }
 
+func responseIsBinary(t *TestCase) bool {
+	return t.Config.Response.Type == CFG_RESPONSE_TYPE_BIN
+}
+
 func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	client := http.Client{}
 	defer client.CloseIdleConnections()
@@ -140,7 +144,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	fallbackToBinary := false
 
 	// expecting JSON response, we can assume (hopefully) that the JSON data will fit in memory
-	if !test.Config.Response.IsBinary && len(response.Header.Values(HEADER_CONTENT_TYPE)) > 0 {
+	if !responseIsBinary(test) && len(response.Header.Values(HEADER_CONTENT_TYPE)) > 0 {
 		var responseData []byte
 		for _, t := range response.Header.Values(HEADER_CONTENT_TYPE) {
 			if strings.Contains(t, MIME_JSON) || strings.Contains(t, MIME_TEXT) {
@@ -162,7 +166,7 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 		}
 	}
 	// non-JSON response we'll need to stream from the body
-	if test.Config.Response.IsBinary || fallbackToBinary {
+	if responseIsBinary(test) || fallbackToBinary {
 		rj, err := getBinaryJson(test.Config.Response.FilePath, !fallbackToBinary, response.Body)
 		if err != nil {
 			return err
