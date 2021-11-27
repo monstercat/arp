@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+const (
+	MaxResultMsgLength = 92
+)
+
 type ReportOptions struct {
 	ShortErrors        bool
 	Short              bool
@@ -196,7 +200,7 @@ func PrintSingleTestReport(opts ReportOptions, test *TestResult) {
 			fieldStr := f.ObjectKeyPath
 
 			suffix := "..."
-			maxLength := 64
+			maxLength := MaxResultMsgLength
 			if len(f.Error) < maxLength {
 				maxLength = len(f.Error)
 				suffix = ""

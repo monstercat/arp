@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/html"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 
 	CFG_RESPONSE_TYPE_BIN  = "binary"
 	CFG_RESPONSE_TYPE_JSON = "json"
+	CFG_RESPONSE_TYPE_HTML = "html"
 
 	// Mime types
 	MIME_JSON = "application/json"
@@ -84,6 +86,7 @@ type TestResult struct {
 	Fields          []*FieldMatcherResult
 	Passed          bool
 	Response        map[string]interface{}
+	HtmlResponse    *html.Node
 	ResponseHeaders map[string]interface{}
 	RequestHeaders  http.Header
 	ResolvedRoute   string
@@ -128,7 +131,7 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 	t.Config = *test
 
 	switch t.Config.Response.Type {
-	case CFG_RESPONSE_TYPE_JSON, CFG_RESPONSE_TYPE_BIN:
+	case CFG_RESPONSE_TYPE_JSON, CFG_RESPONSE_TYPE_BIN, CFG_RESPONSE_TYPE_HTML:
 	case "":
 		t.Config.Response.Type = CFG_RESPONSE_TYPE_JSON
 	default:
@@ -145,8 +148,7 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 		t.Config.Method = "WS"
 	}
 
-	if t.Config.Method == "" {
-		// default to GET if nothing is provided
+	if t.Config.Method == "" || t.Config.Response.Type == CFG_RESPONSE_TYPE_HTML {
 		t.Config.Method = "GET"
 	}
 
@@ -247,7 +249,7 @@ func (t *TestCase) GetTestHeaders(inputReader *InputReader) (map[interface{}]int
 	return headersMap, nil
 }
 
-func (t *TestCase) ValidateREST(statusCode int, response map[string]interface{}, headers map[string]interface{}) (bool, []*FieldMatcherResult, error) {
+func (t *TestCase) ValidateREST(statusCode int, response interface{}, headers map[string]interface{}) (bool, []*FieldMatcherResult, error) {
 	var newResults = []*FieldMatcherResult{}
 
 	// Validate status code
@@ -263,7 +265,14 @@ func (t *TestCase) ValidateREST(statusCode int, response map[string]interface{},
 	}
 
 	// Validate Response Data
-	status, results, err := t.ResponseMatcher.Match(response)
+	var status bool
+	var results []*FieldMatcherResult
+	var err error
+	if v, ok := response.(*html.Node); ok {
+		status, results, err = t.ResponseMatcher.MatchHtml(v)
+	} else {
+		status, results, err = t.ResponseMatcher.Match(response)
+	}
 	if err != nil {
 		return false, results, err
 	}
@@ -351,7 +360,12 @@ func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, 
 		if err := executeRest(t, result, input); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.Response, result.ResponseHeaders)
+		if t.Config.Response.Type != CFG_RESPONSE_TYPE_HTML {
+			result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.Response, result.ResponseHeaders)
+		} else {
+			fmt.Printf("Validating html: %v\n", result.HtmlResponse)
+			result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.HtmlResponse, result.ResponseHeaders)
+		}
 	} else {
 		if err := executeRPC(t, result, input); err != nil {
 			return false, result, err

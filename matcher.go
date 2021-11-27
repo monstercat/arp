@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 )
 
 const (
@@ -195,8 +198,16 @@ type FieldMatcherResult struct {
 }
 
 type ResponseMatcher struct {
-	DS     *DataStore
-	Config []*FieldMatcherConfig
+	DS        *DataStore
+	Config    []*FieldMatcherConfig
+	NodeCache NodeCache
+}
+
+type ResponseMatcherResults struct {
+	Status     bool
+	Results    []*FieldMatcherResult
+	DeferCheck bool
+	Err        error
 }
 
 type DepthMatchResponseNode struct {
@@ -212,6 +223,31 @@ type DepthMatchResponse struct {
 
 type NodeCacheObj struct {
 	Node interface{}
+}
+
+type NodeCache struct {
+	Cache map[string]NodeCacheObj
+}
+
+func (nc *NodeCache) LookUp(matcher *FieldMatcherConfig) (interface{}, []FieldPathKey) {
+	var node interface{}
+
+	nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys))
+	distance := 0
+	for nodePath != "" && len(matcher.ObjectKeyPath.Keys)-1-distance >= 0 {
+		if cachedNode, ok := nc.Cache[nodePath]; ok {
+			node = cachedNode.Node
+			if distance == 0 {
+				// exact node match means we can skip trying to iterate on its sub nodes below
+				keys = []FieldPathKey{}
+			}
+			break
+		}
+		distance++
+		nodePath, keys = matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - 1 - distance)
+	}
+
+	return node, keys
 }
 
 func matchPattern(pattern string, field []byte) (bool, error) {
@@ -1211,6 +1247,118 @@ func (r *ResponseMatcher) validateEmpty(response interface{}) (isValid bool) {
 	return false
 }
 
+// Given an input key, return a JSON node representing the key contents
+type KeyProcessor func(key FieldPathKey) interface{}
+
+func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response interface{}, keyProcessor KeyProcessor) ResponseMatcherResults {
+	var results []*FieldMatcherResult
+	var node interface{}
+	node = response
+	pathStr := ""
+
+	// look up any cached nodes from the most specific path to the most generic
+	lookupNode, keys := r.NodeCache.LookUp(matcher)
+	if lookupNode != nil {
+		node = lookupNode
+	}
+	_, isObjMatcher := matcher.Matcher.(*ObjectMatcher)
+
+	// If we are looking for an object in an unsorted array, we need to locate the object using the
+	// more specific property field matchers within it.
+	// Once we find a match based on those properties, then
+	// we can get the cached node result associated with them.
+	// Until then, we defer the check on the object itself.
+	if isObjMatcher && !matcher.ObjectKeyPath.Sorted {
+		return ResponseMatcherResults{false, nil, true, nil}
+	}
+
+	for _, p := range keys {
+		// If a key process is provided, utilize that to locate specific nodes
+		// If no node is returned, then fallback to regular object iteration
+		// for the current key.
+		if keyProcessor != nil {
+			if keyResult := keyProcessor(p); keyResult != nil {
+				node = keyResult
+				continue
+			}
+		}
+
+		switch t := node.(type) {
+		case map[string]interface{}:
+			if tempNode, ok := t[p.Key]; ok {
+				node = tempNode
+			} else {
+				node = nil
+				break
+			}
+		case []interface{}:
+			if matcher.ObjectKeyPath.Sorted {
+				index, err := strconv.ParseInt(p.Key, 10, 32)
+				if err != nil {
+					return ResponseMatcherResults{false, results, false, err}
+				}
+				pathStr += fmt.Sprintf("[%v]", index)
+				if int(index) < len(t) {
+					node = t[index]
+				} else {
+					node = nil
+				}
+			} else {
+				// For unsorted arrays, we end up performing a depth first search until we find a node that passes
+				// the validation.
+				// We will cache the node that was found so that subsequent validations on the same object
+				// will actually be performed on the node that matched the previous validation. Otherwise, generic
+				// validations may pick out other nodes that are not related to what was expected.
+				result := r.depthMatch(t, matcher, pathStr, p.Key)
+				if result.FoundNode.Status && result.FoundNode.MatchedNodeKey {
+					node = result.FoundNode.Node
+					pathStr = result.FoundNode.NodePath
+					// add all parent nodes leading up to the result to our cafmt.che so we can
+					// look them up without having to search again.
+					for i, chainNode := range result.NodeChain {
+						cachepath, _ := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
+						r.NodeCache.Cache[cachepath] = NodeCacheObj{
+							Node: chainNode.Node,
+						}
+					}
+				} else {
+					matcher.Matcher.SetError("Failed locate node")
+				}
+			}
+		}
+	}
+
+	status, ds, err := matcher.Matcher.Match(node, r.DS)
+	if err != nil {
+		return ResponseMatcherResults{false, results, false, err}
+	}
+
+	for k := range ds {
+		(*r.DS)[k] = ds[k]
+	}
+
+	if node == nil && matcher.ObjectKeyPath.IsArrayElement {
+		pathStr += "[x]"
+	}
+
+	results = append(results, &FieldMatcherResult{
+		ObjectKeyPath:   matcher.ObjectKeyPath.GetPath(),
+		Status:          status,
+		Error:           matcher.Matcher.Error(),
+		ShowExtendedMsg: matcher.ObjectKeyPath.IsExecutable || len(matcher.Matcher.Error()) >= 64,
+
+		// if we have an object matcher, ignore any successful results since those are basically implied
+		// by the presence of having matchers defined on its properties.
+		// The only reason an object matcher exists is to add validation for root node existence, and the ability
+		// to save the result as a value.
+		IgnoreResult: isObjMatcher && status,
+	})
+
+	return ResponseMatcherResults{status, results, false, err}
+}
+
+type MatcherProcessor func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults
+
 // Match Validates our test pattern against the actual JSON response
 func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResult, error) {
 	// if we are expecting a payload and get non, throw an error
@@ -1224,45 +1372,72 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 		}, nil
 	}
 
+	return r.matchBase(response, func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
+		return r.matchConfig(matcher, response, nil)
+	})
+}
+
+func (r *ResponseMatcher) MatchHtml(response interface{}) (bool, []*FieldMatcherResult, error) {
+	var docReader *goquery.Document
+	if v, ok := response.(*html.Node); ok {
+		docReader = goquery.NewDocumentFromNode(v)
+	}
+
+	// HTML processor uses goquery to use jquery like selectors for locating nodes.
+	// Each nested query selector will be applied to the results of the previous selector.
+	processor := func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
+		var curSelection *goquery.Selection
+		return r.matchConfig(matcher, response, func(p FieldPathKey) interface{} {
+			var resultNode interface{}
+			if strings.HasPrefix(p.Key, "<") && strings.HasSuffix(p.Key, ">") {
+				newKey := strings.TrimPrefix(p.Key, "<")
+				newKey = strings.TrimSuffix(newKey, ">")
+				if curSelection == nil {
+					curSelection = docReader.Find(newKey)
+				} else {
+					curSelection = curSelection.Find(newKey)
+				}
+
+				if len(curSelection.Nodes) == 1 {
+					htmlNode, _ := getHtmlJson(curSelection.Nodes[0])
+					resultNode = htmlNode
+				} else if len(curSelection.Nodes) > 1 {
+					selectionRoot := html.Node{}
+					curSelectNode := &selectionRoot
+					for _, cNode := range curSelection.Nodes {
+						(*curSelectNode).NextSibling = cNode
+						curSelectNode = cNode
+					}
+					resultNode, _ = getHtmlJson(&selectionRoot)
+				}
+			}
+			return resultNode
+		})
+	}
+
+	return r.matchBase(response, processor)
+}
+
+func (r *ResponseMatcher) matchBase(response interface{}, matcherProcessor MatcherProcessor) (bool, []*FieldMatcherResult, error) {
 	// make sure we're running everything in the correct object and priority order
 	r.SortConfigs()
-
 	var results []*FieldMatcherResult
 	aggregatedStatus := true
-	sharedNodes := make(map[string]NodeCacheObj)
 
 	for mIndex := 0; mIndex < len(r.Config); mIndex++ {
 		matcher := r.Config[mIndex]
 
-		var node interface{}
-		node = response
-		pathStr := ""
+		mR := matcherProcessor(matcher, response)
+		status := mR.Status
+		fieldResults := mR.Results
+		deferCheck := mR.DeferCheck
+		err := mR.Err
 
-		// look up any cached nodes from the most specific path to the most generic
-		nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys))
-		distance := 0
-		for nodePath != "" && len(matcher.ObjectKeyPath.Keys)-1-distance >= 0 {
-			if cachedNode, ok := sharedNodes[nodePath]; ok {
-				node = cachedNode.Node
-				if distance == 0 {
-					// exact node match means we can skip trying to iterate on its sub nodes below
-					keys = []FieldPathKey{}
-				}
-				break
-			}
-			distance++
-			nodePath, keys = matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys) - 1 - distance)
+		results = append(results, fieldResults...)
+		if err != nil {
+			return false, results, err
 		}
-		_, isObjMatcher := matcher.Matcher.(*ObjectMatcher)
-
-		// If we are looking for an object in an unsorted array, we need to locate the object using the
-		// more specific property field matchers within it.
-		// Once we find a match based on those properties, then
-		// we can get the cached node result associated with them.
-		if isObjMatcher && !matcher.ObjectKeyPath.Sorted {
-			// Set this to true so that we don't end up in an infinite loop.
-			// This object node path should exist in the 'sharedNodes' cache as a parent of
-			// the property matcher used to locate the node
+		if deferCheck {
 			matcher.ObjectKeyPath.Sorted = true
 			// add this matcher to the end of our validation, we'll process it once we've located the node
 			r.Config = append(r.Config, matcher)
@@ -1271,80 +1446,6 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 			mIndex--
 			continue
 		}
-
-		for _, p := range keys {
-			switch t := node.(type) {
-			case map[string]interface{}:
-				if tempNode, ok := t[p.Key]; ok {
-					node = tempNode
-				} else {
-					node = nil
-					break
-				}
-			case []interface{}:
-				if matcher.ObjectKeyPath.Sorted {
-					index, err := strconv.ParseInt(p.Key, 10, 32)
-					if err != nil {
-						return false, results, err
-					}
-					pathStr += fmt.Sprintf("[%v]", index)
-					if int(index) < len(t) {
-						node = t[index]
-					} else {
-						node = nil
-					}
-				} else {
-					// For unsorted arrays, we end up performing a depth first search until we find a node that passes
-					// the validation.
-					// We will cache the node that was found so that subsequent validations on the same object
-					// will actually be performed on the node that matched the previous validation. Otherwise, generic
-					// validations may pick out other nodes that are not related to what was expected.
-					result := r.depthMatch(t, matcher, pathStr, p.Key)
-					if result.FoundNode.Status && result.FoundNode.MatchedNodeKey {
-						node = result.FoundNode.Node
-						pathStr = result.FoundNode.NodePath
-						// add all parent nodes leading up to the result to our cafmt.che so we can
-						// look them up without having to search again.
-						for i, chainNode := range result.NodeChain {
-							cachepath, _ := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
-							sharedNodes[cachepath] = NodeCacheObj{
-								Node: chainNode.Node,
-							}
-						}
-					} else {
-						matcher.Matcher.SetError("Failed locate node")
-					}
-				}
-
-			}
-
-		}
-
-		status, ds, err := matcher.Matcher.Match(node, r.DS)
-		if err != nil {
-			return false, results, err
-		}
-
-		for k := range ds {
-			(*r.DS)[k] = ds[k]
-		}
-
-		if node == nil && matcher.ObjectKeyPath.IsArrayElement {
-			pathStr += "[x]"
-		}
-
-		results = append(results, &FieldMatcherResult{
-			ObjectKeyPath:   matcher.ObjectKeyPath.GetPath(),
-			Status:          status,
-			Error:           matcher.Matcher.Error(),
-			ShowExtendedMsg: matcher.ObjectKeyPath.IsExecutable || len(matcher.Matcher.Error()) >= 64,
-
-			// if we have an object matcher, ignore any successful results since those are basically implied
-			// by the presence of having matchers defined on its properties.
-			// The only reason an object matcher exists is to add validation for root node existence, and the ability
-			// to save the result as a value.
-			IgnoreResult: isObjMatcher && status,
-		})
 
 		aggregatedStatus = aggregatedStatus && status
 	}

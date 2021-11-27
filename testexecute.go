@@ -2,7 +2,6 @@ package arp
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/html"
 )
 
 const (
@@ -29,30 +29,6 @@ const (
 	WS_MSG_JSON = "json"
 	WS_MSG_BIN  = "binary"
 )
-
-type ByteCountWriter struct {
-	ByteCount uint64
-}
-
-func (w *ByteCountWriter) Write(b []byte) (int, error) {
-	bytesToWrite := len(b)
-	w.ByteCount += uint64(bytesToWrite)
-	return bytesToWrite, nil
-}
-
-type BinResponseJson struct {
-	Saved     string   `json:"saved"`
-	Notice    []string `json:"NOTICE,omitempty"`
-	Size      uint64   `json:"size"`
-	SHA256Sum string   `json:"sha256sum"`
-}
-
-func (bj *BinResponseJson) GenericJSON() map[string]interface{} {
-	genericJson := make(map[string]interface{})
-	b, _ := json.Marshal(bj)
-	json.Unmarshal(b, &genericJson)
-	return genericJson
-}
 
 type WSMessage struct {
 	Payload     interface{} `yaml:"payload" json:"payload"`
@@ -76,6 +52,10 @@ type WsResponseJson struct {
 
 func responseIsBinary(t *TestCase) bool {
 	return t.Config.Response.Type == CFG_RESPONSE_TYPE_BIN
+}
+
+func responseIsHtml(t *TestCase) bool {
+	return t.Config.Response.Type == CFG_RESPONSE_TYPE_HTML
 }
 
 func executeRest(test *TestCase, result *TestResult, input interface{}) error {
@@ -143,8 +123,19 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 	var responseJson map[string]interface{}
 	fallbackToBinary := false
 
-	// expecting JSON response, we can assume (hopefully) that the JSON data will fit in memory
-	if !responseIsBinary(test) && len(response.Header.Values(HEADER_CONTENT_TYPE)) > 0 {
+	if responseIsHtml(test) {
+		node, err := html.Parse(response.Body)
+		if err != nil {
+			return err
+		}
+		result.HtmlResponse = node
+		rj, err := getHtmlJson(node)
+		if err != nil {
+			return err
+		}
+		responseJson = rj
+	} else if !responseIsBinary(test) && len(response.Header.Values(HEADER_CONTENT_TYPE)) > 0 {
+		// expecting JSON response, we can assume (hopefully) that the JSON data will fit in memory
 		var responseData []byte
 		for _, t := range response.Header.Values(HEADER_CONTENT_TYPE) {
 			if strings.Contains(t, MIME_JSON) || strings.Contains(t, MIME_TEXT) {
@@ -302,57 +293,6 @@ func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, resul
 		result.Response[WS_RESPONSE] = append(result.Response[WS_RESPONSE].([]interface{}), subRespJson)
 	}
 	return nil
-}
-
-// Convert a binary response into a JSON object that can be used to identify or compare the contents of (at a high level)
-func getBinaryJson(savePath string, isExpected bool, response io.Reader) (map[string]interface{}, error) {
-	// if we're expecting a binary response, generate a json representation of the data to use with our
-	// validation logic
-	//responseJson := make(map[string]interface{})
-	hasher := sha256.New()
-	sizeCounter := &ByteCountWriter{}
-
-	// we want to track how many bytes we're reading from the body
-	sizeReader := io.TeeReader(response, sizeCounter)
-	// and we want to pipe the output into the hasher as well
-	hashReader := io.TeeReader(sizeReader, hasher)
-	responseJson := &BinResponseJson{}
-
-	targetPath := savePath
-	var file *os.File
-	if !isExpected && targetPath == "" {
-		f, err := os.CreateTemp("", RESPONSE_PATH_FMT)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary file: %v", err)
-		}
-		file = f
-	}
-
-	if targetPath != "" {
-		f, fErr := os.OpenFile(targetPath, os.O_CREATE|os.O_RDWR, 0700)
-		if fErr != nil {
-			return nil, fmt.Errorf("failed to open file %v while writing response: %v", savePath, fErr)
-		}
-		file = f
-	}
-
-	if file != nil {
-		io.Copy(file, hashReader)
-		responseJson.Saved = file.Name()
-	} else {
-		io.ReadAll(hashReader)
-	}
-
-	if !isExpected {
-		responseJson.Notice = []string{
-			"Unexpected non-JSON response was returned from this call triggering a fallback to its binary representation.",
-			"Response data has been written to the path in the 'saved' field of this object."}
-	}
-
-	responseJson.SHA256Sum = string(hex.EncodeToString(hasher.Sum(nil)))
-	responseJson.Size = sizeCounter.ByteCount
-
-	return responseJson.GenericJSON(), nil
 }
 
 func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {
