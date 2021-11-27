@@ -99,14 +99,22 @@ type InputReader struct {
 func (t *TestCase) HasTag(tagList string) bool {
 	hasTag := false
 	tags := strings.Split(tagList, ",")
-
 	for _, tt := range tags {
-		_, hasTag = t.Tags[tt]
-		if hasTag {
+		tagStr := tt
+		negated := false
+
+		if strings.HasPrefix(tt, "!") {
+			negated = true
+			tagStr = strings.TrimPrefix(tagStr, "!")
+		}
+
+		_, hasTag = t.Tags[tagStr]
+		if !negated && hasTag {
+			return true
+		} else if negated && !hasTag {
 			return true
 		}
 	}
-
 	return false
 }
 
