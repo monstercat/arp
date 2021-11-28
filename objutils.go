@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
@@ -17,6 +19,22 @@ func YamlToJson(i interface{}) interface{} {
 		m2 := map[string]interface{}{}
 		for k, v := range x {
 			m2[k.(string)] = YamlToJson(v)
+		}
+		return m2
+	case []interface{}:
+		for i, v := range x {
+			x[i] = YamlToJson(v)
+		}
+	}
+	return i
+}
+
+func JsonToYaml(i interface{}) interface{} {
+	switch x := i.(type) {
+	case map[string]interface{}:
+		m2 := map[interface{}]interface{}{}
+		for k, v := range x {
+			m2[k] = JsonToYaml(v)
 		}
 		return m2
 	case []interface{}:
@@ -69,4 +87,244 @@ func Base64GzipToByteReader(input string) (io.ReadCloser, error) {
 	}
 
 	return gzipR, nil
+}
+
+type JsonKey struct {
+	Name           string
+	IsArray        bool
+	IsArrayElement bool
+	IsLast         bool
+	IsObject       bool
+}
+
+// GetJsonPath Returns a string representation of a series of json keys that make up a path to a value
+// in a json object. The maxDepth provides a limit on how deep into the path structure to construct since
+// the key object count to json path node count is not always 1-1 (e.g. array[index] is split as 2 keys but
+// only counts as a single node in the path)
+// The remaining unprocessed keys are returned along with the string representation of the processed keys.
+func GetJsonPath(keys []JsonKey, maxDepth int) (string, []JsonKey) {
+	pathStr := ""
+	nodeCount := 0
+	remainingKeys := keys
+	for i, k := range keys {
+		remainingKeys = keys[i:]
+		if nodeCount >= maxDepth {
+			return pathStr, remainingKeys
+		}
+
+		if k.IsArrayElement {
+			pathStr += fmt.Sprintf("[%v]", k.Name)
+			nodeCount++
+		} else if k.IsObject {
+			pathStr += fmt.Sprintf(".%v", k.Name)
+		} else {
+			pathStr += "." + k.Name
+			nodeCount++
+		}
+	}
+
+	return pathStr, remainingKeys
+}
+
+func sanitizeQuotedIndex(key string) string {
+	cleaned := key
+	for _, c := range "\"`'" {
+		cleaned = strings.TrimPrefix(cleaned, string(c))
+		cleaned = strings.TrimSuffix(cleaned, string(c))
+	}
+	return cleaned
+}
+
+// SplitJsonPath Splits a string formatted as a JSON accessor into its individual keys
+// with metadata. E.g. "data.someArray[1].value" -> "[data, someArray, 1, value]"
+func SplitJsonPath(jsonPath string) []JsonKey {
+	keys := SplitStringTokens(jsonPath, ".")
+
+	// Extract array indexing from the keys as their own key for iterating the datastore.
+	var expandedKeys []JsonKey
+	for _, k := range keys {
+		runes := []rune(k)
+		foundBrackets := false
+		// scan for brackets or array indexing
+		for i := 0; i < len(runes); i++ {
+			c := runes[i]
+			// if we encounter a square bracket, then scan for the key/index
+			if c == '[' && i+1 <= len(runes) {
+				index := ""
+				skipChars := 0
+				// offset by one to exclude the starting bracket
+				for v, b := range k[i+1:] {
+					if b != ']' {
+						index += string(b)
+					} else {
+						break
+					}
+					skipChars = v
+				}
+
+				// test if it's a number
+				var toAdd JsonKey
+				if _, err := strconv.ParseInt(index, 10, 64); err == nil {
+					toAdd = JsonKey{Name: index, IsArrayElement: true}
+					if len(expandedKeys) > 0 {
+						// mark the previous key as an array
+						expandedKeys[len(expandedKeys)-1].IsArray = true
+					}
+				} else {
+					// otherwise its an object key
+					toAdd = JsonKey{Name: sanitizeQuotedIndex(index)}
+				}
+
+				// store the parent key (only on the first occurence of an indexing). There can be
+				// instances of key[index1][index2] for nested arrays
+				if !foundBrackets {
+					if parentKey := string(runes[:i]); parentKey != "" {
+						expandedKeys = append(expandedKeys, JsonKey{Name: parentKey})
+					}
+				}
+
+				// then store the associated object or index key
+				expandedKeys = append(expandedKeys, toAdd)
+				i += skipChars + 1
+				foundBrackets = true
+			}
+		}
+		// if no brackets were found then we can use the entire key
+		if !foundBrackets {
+			expandedKeys = append(expandedKeys, JsonKey{Name: k})
+		}
+	}
+	expandedKeys[len(expandedKeys)-1].IsLast = true
+	return expandedKeys
+}
+
+// PutJsonValue Insert an arbitrary value at a desired jsonPath. If the intermediary
+// objects/arrays don't exist, they will be created.
+func PutJsonValue(dest map[string]interface{}, jsonPath string, value interface{}) error {
+	type Noodle struct {
+		Parent      interface{}
+		Node        interface{}
+		ParentKey   string
+		ParentIndex int64
+	}
+
+	expandedKeys := SplitJsonPath(jsonPath)
+	node := Noodle{
+		Node:   dest,
+		Parent: dest,
+	}
+
+	for _, k := range expandedKeys {
+		key := k.Name
+		var temp interface{}
+		switch v := node.Node.(type) {
+		case map[string]interface{}:
+			if nextNode, ok := v[key]; !ok {
+				if k.IsLast {
+					v[key] = value
+					return nil
+				} else if k.IsArray {
+					temp = make([]interface{}, 1)
+				} else {
+					temp = make(map[string]interface{})
+				}
+				v[key] = temp
+				node = Noodle{
+					Node:        temp,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			} else {
+				// otherwise overwrite existing ones
+				if k.IsLast {
+					v[key] = value
+					return nil
+				}
+				node = Noodle{
+					Node:        nextNode,
+					Parent:      &v,
+					ParentKey:   key,
+					ParentIndex: -1,
+				}
+			}
+		case []interface{}:
+			idx, err := strconv.ParseUint(key, 10, 64)
+			if err != nil {
+				return fmt.Errorf(BadIndexDSFmt, jsonPath)
+			}
+			// if the index is out of range, then we'll resize the array just enough to fix the index
+			if idx > uint64(len(v)) {
+				newArray := v[:]
+				delta := (idx - uint64(len(v))) + 1
+				for delta > 0 {
+					delta--
+					newArray = append(newArray, nil)
+
+				}
+				if node.ParentKey != "" {
+					n := node.Parent.(*map[string]interface{})
+					(*n)[node.ParentKey] = newArray
+				} else if node.ParentIndex >= 0 {
+					n := node.Parent.(*[]interface{})
+					(*n)[node.ParentIndex] = newArray
+				}
+				v = newArray
+			}
+			if v[idx] == nil {
+				if k.IsLast {
+					v[idx] = value
+					return nil
+				} else if k.IsArray {
+					temp = make([]interface{}, 1)
+				} else {
+					temp = make(map[string]interface{})
+				}
+				v[idx] = temp
+			} else {
+				if k.IsLast {
+					v[idx] = value
+					return nil
+				}
+			}
+			node = Noodle{
+				Node:        v[idx],
+				Parent:      &v,
+				ParentIndex: int64(idx),
+			}
+		}
+	}
+	return nil
+}
+
+func GetJsonValue(src map[string]interface{}, jsonPath string) (interface{}, error) {
+	expandedKeys := SplitJsonPath(jsonPath)
+	var node interface{}
+	node = src
+	for _, k := range expandedKeys {
+		key := k.Name
+		switch v := node.(type) {
+		case map[string]interface{}:
+			if nextNode, ok := v[key]; !ok {
+				return "", fmt.Errorf(MissingDSKeyFmt, jsonPath)
+			} else {
+				node = nextNode
+			}
+		case []interface{}:
+			idx, err := strconv.ParseUint(key, 10, 64)
+			if err != nil {
+				// should catch non integer and negative value
+				return "", fmt.Errorf(BadIndexDSFmt, jsonPath)
+			}
+			if idx > uint64(len(v)) {
+				return "", fmt.Errorf(IndexExceedsDSFmt, jsonPath)
+			}
+
+			node = v[idx]
+		default:
+			return "", fmt.Errorf(MissingDSKeyFmt, jsonPath)
+		}
+	}
+
+	return node, nil
 }

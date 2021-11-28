@@ -722,7 +722,96 @@ payload:
 All objects are validated based on the keys present in the validations definition. If `MyObject` exists and the `FieldOne` property does not exist, a validation error will be raised.
 
 #### Short form
-No Short form is available for Object validations at this point in time. There is no way to determine whether an object will be a test definition or is part of the expected payload due to potential collisions with the `type` and `property` field on valid response objects.
+Short form for objects are supported *only* using a json path notation as descripted in the `JSON Notation` section below.
+
+
+### JSON Notation
+On top of the supported short forms for defining validators, it's possible to use JSON dot notation to automatically
+create the structural validations leading to your specific key. JSON paths are defined with a prefix `$.` and then follow
+the dot (`.`) notation to index into objects and square brackets for arrays.
+
+```yaml
+payload:
+  $.MyObject.SomeArray[0].value: $any
+---
+# Is the same as
+payload:
+  $.MyObject.SomeArray[0].value:
+    type: string
+    matches: $any
+
+---    
+# Is the same as
+payload:
+  $.MyObject.SomeArray[0]:
+    type: object
+    properties:
+      value:
+        type: string
+        matches: $any
+        
+---
+# Is the same as
+payload:
+  $.MyObject.SomeArray:
+    type: array
+    length: $notEmpty
+    items:
+      - type: object
+        properties:
+          value:
+            type: string
+            matches: $any
+            
+---
+# Is the same as
+payload:
+  MyObject:
+    type: object
+    properties:
+      
+      SomeArray:
+        type: array
+        length: $notEmpty
+        
+        items:
+          - type: object
+            properties:
+              value:
+                type: string
+                matches: $any
+
+```
+
+It should be noted that all intermediary validators for nodes in the json path will be created automatically and duplicate
+validators that are created will be **ignored**. So if you wanted to define a specific length validator for `SomeArray`, then it must
+be defined first so the subsequent default ones will be ignored.
+
+
+
+```yaml
+# Validate array length and first element value using JSON dot notation
+payload:
+  # Define leading structure validations first
+  $.MyObject.SomeArray:
+    type: array
+    length: 5
+    
+  # Then define the child validations
+  $.MyObject.SomeArray[0].value: $any
+```
+
+JSON path notation will respect its position relative to its parent definition:
+
+```yaml
+payload:
+  MyObject:
+    type: object
+    properties:
+      $.SomeArray[0].value: $any
+
+# Will validate: MyObject.SomeArray[0].value
+```
 
 
 ### Field Existence

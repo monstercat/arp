@@ -126,8 +126,20 @@ func (t *TestCase) HasTag(tagList string) bool {
 
 func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 	t.ResponseMatcher.DS = t.GlobalDataStore
+	t.ResponseMatcher.NodeCache = NodeCache{
+		Cache: map[string]NodeCacheObj{},
+	}
+
 	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
+	t.ResponseHeaderMatcher.NodeCache = NodeCache{
+		Cache: map[string]NodeCacheObj{},
+	}
+
 	t.StatusCodeMatcher.DS = t.GlobalDataStore
+	t.StatusCodeMatcher.NodeCache = NodeCache{
+		Cache: map[string]NodeCacheObj{},
+	}
+
 	t.Config = *test
 
 	switch t.Config.Response.Type {
@@ -162,7 +174,7 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 	sc := t.Config.Response.StatusCode
 	if sc != nil {
 		keyPath := FieldMatcherPath{
-			Keys: []FieldPathKey{{Key: CFG_RESPONSE_CODE}},
+			Keys: []FieldMatcherKey{{Name: CFG_RESPONSE_CODE, RealKey: JsonKey{Name: CFG_RESPONSE_CODE}}},
 		}
 
 		if statusMatcher, mOk := sc.(map[interface{}]interface{}); mOk {
@@ -289,8 +301,8 @@ func (t *TestCase) ValidateREST(statusCode int, response interface{}, headers ma
 	}
 	// Wrap things up
 	if status && headerStatus && sPassed {
-		for k := range *t.ResponseMatcher.DS {
-			(*t.GlobalDataStore)[k] = (*t.ResponseMatcher.DS)[k]
+		for k := range t.ResponseMatcher.DS.Store {
+			t.GlobalDataStore.Put(k, t.ResponseMatcher.DS.Get(k))
 		}
 	}
 	return status && headerStatus && sPassed, newResults, nil
@@ -377,12 +389,12 @@ func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, 
 }
 
 func (t *TestCase) CloseWebsocket() {
-	if wsc, ok := (*t.GlobalDataStore)[DS_WS_CLIENT]; ok {
+	if wsc, ok := t.GlobalDataStore.Store[DS_WS_CLIENT]; ok {
 		c := wsc.(*websocket.Conn)
 		c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		c.Close()
 
-		delete(*t.GlobalDataStore, DS_WS_CLIENT)
+		delete(t.GlobalDataStore.Store, DS_WS_CLIENT)
 	}
 }
 
@@ -398,7 +410,7 @@ func (t *TestCase) GetWebsocketClient() (*websocket.Conn, string, error) {
 	// test to create a new connection.
 	// Otherwise, if no client exists already, we'll create a new one and connect it.
 	var client *websocket.Conn
-	if prevClient, ok := (*t.GlobalDataStore)[DS_WS_CLIENT]; !ok {
+	if prevClient, ok := t.GlobalDataStore.Store[DS_WS_CLIENT]; !ok {
 		inputHeaders := http.Header{}
 
 		headers, err := t.GetTestHeaders(nil)
@@ -415,7 +427,7 @@ func (t *TestCase) GetWebsocketClient() (*websocket.Conn, string, error) {
 		if err != nil {
 			return nil, route, fmt.Errorf("failed to start websocket client: %v", err)
 		}
-		(*t.GlobalDataStore)[DS_WS_CLIENT] = client
+		t.GlobalDataStore.Put(DS_WS_CLIENT, client)
 	} else {
 		client = prevClient.(*websocket.Conn)
 	}

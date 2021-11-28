@@ -2,7 +2,6 @@ package arp
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -11,12 +10,12 @@ const (
 	VAR_SUFFIX = "}"
 )
 
-type DataStore map[string]interface{}
+type DataStore struct {
+	Store map[string]interface{}
+}
 
-type VariableKey struct {
-	Name    string
-	IsArray bool
-	IsLast  bool
+func isVar(input string) bool {
+	return strings.HasPrefix(input, VAR_PREFIX) && strings.HasSuffix(input, VAR_SUFFIX)
 }
 
 func varToString(variable interface{}, def ...string) string {
@@ -30,216 +29,28 @@ func varToString(variable interface{}, def ...string) string {
 	return fmt.Sprintf("%v", variable)
 }
 
-func extractVariablePath(variableName string) []VariableKey {
-	keys := strings.Split(variableName, ".")
-
-	// Extract array indexing from the keys as their own key for iterating the datastore.
-	var expandedKeys []VariableKey
-	for _, k := range keys {
-		hasIndex := false
-		index := ""
-		for i, c := range k {
-			if c == '[' {
-				if hasIndex {
-					index = ""
-				} else {
-					n := strings.TrimSpace(k[:i])
-					expandedKeys = append(expandedKeys, VariableKey{Name: n, IsArray: true})
-				}
-				hasIndex = true
-
-				continue
-			}
-
-			if c != ']' && hasIndex {
-				index += string(c)
-			} else if c == ']' {
-				n := strings.TrimSpace(index)
-				expandedKeys = append(expandedKeys, VariableKey{Name: n})
-			}
-		}
-		if !hasIndex {
-			n := strings.TrimSpace(k)
-			expandedKeys = append(expandedKeys, VariableKey{Name: n})
-		}
+func NewDataStore() DataStore {
+	return DataStore{
+		Store: make(map[string]interface{}),
 	}
-	expandedKeys[len(expandedKeys)-1].IsLast = true
+}
 
-	return expandedKeys
+func (t *DataStore) Put(key string, value interface{}) {
+	t.Store[key] = value
+}
+
+func (t *DataStore) Get(key string) interface{} {
+	return t.Store[key]
 }
 
 func (t *DataStore) resolveVariable(variable string) (interface{}, error) {
-	// Extract array indexing from the keys as their own key for iterating the datastore.
 	cleanedVar := variable[len(VAR_PREFIX) : len(variable)-len(VAR_SUFFIX)]
-	expandedKeys := extractVariablePath(cleanedVar)
-
-	var node interface{}
-	node = *t
-	for _, k := range expandedKeys {
-		key := k.Name
-		switch v := node.(type) {
-		case DataStore:
-			if nextNode, ok := v[key]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
-			} else {
-				node = nextNode
-			}
-		case map[string]interface{}:
-			if nextNode, ok := v[key]; !ok {
-				return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
-			} else {
-				node = nextNode
-			}
-		case []interface{}:
-			idx, err := strconv.ParseUint(key, 10, 64)
-			if err != nil {
-				// should catch non integer and negative value
-				return "", fmt.Errorf(BadIndexDSFmt, cleanedVar)
-			}
-			if idx > uint64(len(v)) {
-				return "", fmt.Errorf(IndexExceedsDSFmt, cleanedVar)
-			}
-
-			node = v[idx]
-		default:
-			return "", fmt.Errorf(MissingDSKeyFmt, cleanedVar)
-		}
-	}
-
-	return node, nil
+	return GetJsonValue(t.Store, cleanedVar)
 }
 
 // PutVariable Given a variable name (or path in a JSON object) store the value for said path.
 func (t *DataStore) PutVariable(variable string, value interface{}) error {
-	type Noodle struct {
-		Parent      interface{}
-		Node        interface{}
-		ParentKey   string
-		ParentIndex int64
-	}
-
-	expandedKeys := extractVariablePath(variable)
-	node := Noodle{
-		Node:   *t,
-		Parent: *t,
-	}
-
-	for _, k := range expandedKeys {
-		key := k.Name
-		var temp interface{}
-		switch v := node.Node.(type) {
-		case DataStore:
-			if nextNode, ok := v[key]; !ok {
-				// insert values if it doesn't exist
-				if k.IsLast {
-					v[key] = value
-					return nil
-				} else if k.IsArray {
-					temp = make([]interface{}, 1)
-				} else {
-					temp = make(map[string]interface{})
-				}
-				v[key] = temp
-				node = Noodle{
-					Node:        temp,
-					Parent:      &v,
-					ParentKey:   key,
-					ParentIndex: -1,
-				}
-			} else {
-				// otherwise overwrite existing ones
-				if k.IsLast {
-					v[key] = value
-					return nil
-				}
-				node = Noodle{
-					Node:        nextNode,
-					Parent:      &v,
-					ParentKey:   key,
-					ParentIndex: -1,
-				}
-			}
-		case map[string]interface{}:
-			if nextNode, ok := v[key]; !ok {
-				if k.IsLast {
-					v[key] = value
-					return nil
-				} else if k.IsArray {
-					temp = make([]interface{}, 1)
-				} else {
-					temp = make(map[string]interface{})
-				}
-				v[key] = temp
-				node = Noodle{
-					Node:        temp,
-					Parent:      &v,
-					ParentKey:   key,
-					ParentIndex: -1,
-				}
-			} else {
-				// otherwise overwrite existing ones
-				if k.IsLast {
-					v[key] = value
-					return nil
-				}
-				node = Noodle{
-					Node:        nextNode,
-					Parent:      &v,
-					ParentKey:   key,
-					ParentIndex: -1,
-				}
-			}
-		case []interface{}:
-			idx, err := strconv.ParseUint(key, 10, 64)
-			if err != nil {
-				return fmt.Errorf(BadIndexDSFmt, variable)
-			}
-			// if the index is out of range, then we'll resize the array just enough to fix the index
-			if idx > uint64(len(v)) {
-				newArray := v[:]
-				delta := (idx - uint64(len(v))) + 1
-				for delta > 0 {
-					delta--
-					newArray = append(newArray, nil)
-
-				}
-				if node.ParentKey != "" {
-					n := node.Parent.(*map[string]interface{})
-					(*n)[node.ParentKey] = newArray
-				} else if node.ParentIndex >= 0 {
-					n := node.Parent.(*[]interface{})
-					(*n)[node.ParentIndex] = newArray
-				}
-				v = newArray
-			}
-			if v[idx] == nil {
-				if k.IsLast {
-					v[idx] = value
-					return nil
-				} else if k.IsArray {
-					temp = make([]interface{}, 1)
-				} else {
-					temp = make(map[string]interface{})
-				}
-				v[idx] = temp
-			} else {
-				if k.IsLast {
-					v[idx] = value
-					return nil
-				}
-			}
-			node = Noodle{
-				Node:        v[idx],
-				Parent:      &v,
-				ParentIndex: int64(idx),
-			}
-		}
-	}
-	return nil
-}
-
-func isVar(input string) bool {
-	return strings.HasPrefix(input, VAR_PREFIX) && strings.HasSuffix(input, VAR_SUFFIX)
+	return PutJsonValue(t.Store, variable, value)
 }
 
 func (t *DataStore) ExpandVariable(input string) (interface{}, error) {

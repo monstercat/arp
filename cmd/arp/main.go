@@ -88,7 +88,7 @@ func (p *ProgramArgs) Init() {
 }
 
 func populateDataStore(ds *DataStore, vars varFlags) error {
-	(*ds)["host"] = "http://localhost"
+	ds.Put("host", "http://localhost")
 	for _, v := range vars {
 		pair := strings.SplitN(v, "=", 2)
 

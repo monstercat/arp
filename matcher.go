@@ -24,6 +24,8 @@ const (
 	GTE      = "$>="
 	EQ       = "$="
 
+	FIELD_KEY_PREFIX = "$."
+
 	// special keywords used in validation object definitions
 	TEST_KEY_TYPE       = "type"
 	TEST_KEY_PROPERTIES = "properties"
@@ -136,52 +138,55 @@ type ExecutableMatcher struct {
 	Priority   int
 }
 
-type FieldPathKey struct {
-	Key          string
-	IsArrayIndex bool
-	IsObjectRoot bool
+type FieldMatcherKey struct {
+	Name    string
+	RealKey JsonKey
+}
+
+func (f *FieldMatcherKey) GetDisplayName() string {
+	return f.Name
+}
+
+func (f *FieldMatcherKey) GetJsonKey() string {
+	return f.RealKey.Name
 }
 
 type FieldMatcherPath struct {
-	Keys           []FieldPathKey
-	IsArrayElement bool
-	Sorted         bool
-	IsExecutable   bool
+	Keys         []FieldMatcherKey
+	Sorted       bool
+	IsExecutable bool
 }
 
-func (f *FieldMatcherPath) getObjectPath(length int) (string, []FieldPathKey) {
-	// build the full json string path
-	pathStr := ""
-	nodeCount := 0
-	remainingKeys := f.Keys
-	for i, k := range f.Keys {
-		remainingKeys = f.Keys[i:]
-		if nodeCount >= length {
-			return pathStr, remainingKeys
-		}
-
-		if k.IsArrayIndex {
-			pathStr += fmt.Sprintf("[%v]", k.Key)
-			nodeCount++
-		} else if k.IsObjectRoot {
-			pathStr += fmt.Sprintf(".%v", k.Key)
-		} else {
-			pathStr += "." + k.Key
-			nodeCount++
-		}
+func (f *FieldMatcherPath) getObjectPath(length int) (string, []FieldMatcherKey) {
+	var jsonKeys []JsonKey
+	for _, k := range f.Keys {
+		jsonKeys = append(jsonKeys, k.RealKey)
 	}
 
-	return pathStr, remainingKeys
-}
+	p, remaining := GetJsonPath(jsonKeys, length)
 
-func (f *FieldMatcherPath) GetParentPath() string {
-	path, _ := f.getObjectPath(len(f.Keys) - 1)
-	return path
+	totalKeys := len(f.Keys)
+	found := len(remaining)
+	remainingFieldKey := f.Keys[totalKeys-found:]
+
+	return p, remainingFieldKey
 }
 
 func (f *FieldMatcherPath) GetPath() string {
 	path, _ := f.getObjectPath(len(f.Keys))
 	return path
+}
+
+func (f *FieldMatcherPath) GetDisplayPath() string {
+	var jsonKeys []JsonKey
+	for _, k := range f.Keys {
+		newKey := k.RealKey
+		newKey.Name = k.GetDisplayName()
+		jsonKeys = append(jsonKeys, newKey)
+	}
+
+	p, _ := GetJsonPath(jsonKeys, len(f.Keys))
+	return p
 }
 
 type FieldMatcherConfig struct {
@@ -229,7 +234,7 @@ type NodeCache struct {
 	Cache map[string]NodeCacheObj
 }
 
-func (nc *NodeCache) LookUp(matcher *FieldMatcherConfig) (interface{}, []FieldPathKey) {
+func (nc *NodeCache) LookUp(matcher *FieldMatcherConfig) (interface{}, []FieldMatcherKey) {
 	var node interface{}
 
 	nodePath, keys := matcher.ObjectKeyPath.getObjectPath(len(matcher.ObjectKeyPath.Keys))
@@ -239,7 +244,7 @@ func (nc *NodeCache) LookUp(matcher *FieldMatcherConfig) (interface{}, []FieldPa
 			node = cachedNode.Node
 			if distance == 0 {
 				// exact node match means we can skip trying to iterate on its sub nodes below
-				keys = []FieldPathKey{}
+				keys = []FieldMatcherKey{}
 			}
 			break
 		}
@@ -325,7 +330,7 @@ func (m *IntegerMatcher) Parse(parentNode interface{}, node map[interface{}]inte
 }
 
 func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
@@ -345,7 +350,7 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 		typedResponseValue = t
 	default:
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_INT, reflect.TypeOf(responseValue))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	if m.Value != nil {
@@ -418,7 +423,7 @@ func (m *FloatMatcher) Parse(parentNode interface{}, node map[interface{}]interf
 }
 
 func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
@@ -431,7 +436,7 @@ func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	typedResponseValue, ok := responseValue.(float64)
 	if !ok {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_NUM, reflect.TypeOf(responseValue))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	if m.Value != nil {
@@ -501,7 +506,7 @@ func (m *BoolMatcher) Parse(parentNode interface{}, node map[interface{}]interfa
 }
 
 func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
@@ -511,7 +516,7 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 	typedResponseValue, ok := responseValue.(bool)
 	if !ok {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_BOOL, reflect.TypeOf(responseValue))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	var status bool
@@ -582,7 +587,7 @@ func (m *StringMatcher) Parse(parentNode interface{}, node map[interface{}]inter
 }
 
 func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
 		return status, store, nil
@@ -591,7 +596,7 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 	typedResponseValue, ok := responseValue.(string)
 	if !ok {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_STR, reflect.TypeOf(responseValue))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	var status bool
@@ -681,7 +686,7 @@ func (m *ArrayMatcher) Parse(parentNode interface{}, node map[interface{}]interf
 }
 
 func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, true); !passthrough {
 		m.ErrorStr = message
 		return status, store, nil
@@ -696,7 +701,7 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 		typedResponseValue, ok = responseValue.([]interface{})
 		if !ok {
 			m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_ARRAY, reflect.TypeOf(responseValue))
-			return false, nil, nil
+			return false, store, nil
 		}
 	}
 	var status bool
@@ -788,7 +793,7 @@ func (m *ObjectMatcher) Parse(parentNode interface{}, node map[interface{}]inter
 
 func (m *ObjectMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	var err error
-	store := DataStore{}
+	store := NewDataStore()
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
@@ -801,7 +806,7 @@ func (m *ObjectMatcher) Match(responseValue interface{}, datastore *DataStore) (
 		typedResponseValue = t
 	default:
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_OBJ, reflect.TypeOf(responseValue))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	m.ErrorStr = "{}"
@@ -868,7 +873,7 @@ func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]i
 }
 
 func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
-	store := DataStore{}
+	store := NewDataStore()
 	m.ErrorStr = ""
 	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
 		m.ErrorStr = message
@@ -879,25 +884,26 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 
 	// immediately store value into datastore so it can be resolved as a variable for program inputs
 	if m.DSName != "" {
-		//(*datastore)[m.DSName] = typedResponseValue
-		(*datastore).PutVariable(m.DSName, typedResponseValue)
+		if err := (*datastore).PutVariable(m.DSName, typedResponseValue); err != nil {
+			return false, store, err
+		}
 	}
 
 	resolvedBinPath, err := datastore.ExpandVariable(m.BinPath)
 	if err != nil {
-		return false, nil, fmt.Errorf(BadVarMatcherFmt, m.BinPath)
+		return false, store, fmt.Errorf(BadVarMatcherFmt, m.BinPath)
 	}
 
 	// resolve variables in the program
 	resolvedArgs, argErr := datastore.RecursiveResolveVariables(m.PrgmArgs)
 	if argErr != nil {
-		return false, nil, fmt.Errorf(BadVarMatcherFmt, m.PrgmArgs)
+		return false, store, fmt.Errorf(BadVarMatcherFmt, m.PrgmArgs)
 	}
 
 	argArray, aOk := resolvedArgs.([]interface{})
 	if !aOk {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_ARRAY, reflect.TypeOf(resolvedArgs))
-		return false, nil, nil
+		return false, store, nil
 	}
 
 	var argStrings []string
@@ -940,6 +946,28 @@ func (m *ExecutableMatcher) GetPriority() int {
 
 func (m *ExecutableMatcher) SetError(error string) {
 	m.ErrorStr = error
+}
+
+func (r *ResponseMatcher) AddMatcherConfig(config *FieldMatcherConfig) {
+	// Do a dumb check for a duplicate matcher. This can happen
+	// when a config contains a mix of short json path defined matchers
+	// and the long exploded form of matchers.
+	searchKey := config.ObjectKeyPath.GetPath()
+
+	exists := false
+	for _, c := range r.Config {
+		// ToDo: At some point we should check if we're adding or skipping a
+		// more specific matcher. At the moment it's possible to override a more specific
+		// matcher with a generalized one.
+		if c.ObjectKeyPath.GetPath() == searchKey {
+			exists = true
+			break
+		}
+	}
+
+	if !exists {
+		r.Config = append(r.Config, config)
+	}
 }
 
 // If the field matcher is defined as an object, we'll parse the data to create our matchers
@@ -1010,11 +1038,10 @@ func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interf
 	}
 
 	if foundMatcher != nil {
-		config := &FieldMatcherConfig{
+		r.AddMatcherConfig(&FieldMatcherConfig{
 			Matcher:       foundMatcher,
 			ObjectKeyPath: paths,
-		}
-		r.Config = append(r.Config, config)
+		})
 
 		// visit array elements AFTER we have added the array to the config
 		switch val := foundMatcher.(type) {
@@ -1024,7 +1051,7 @@ func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interf
 			}
 		case *ObjectMatcher:
 			last := &paths.Keys[len(paths.Keys)-1]
-			last.IsObjectRoot = true
+			last.RealKey.IsObject = true
 			if err := r.loadObjectFields(parentNode, val.Properties, paths); err != nil {
 				return err
 			}
@@ -1074,18 +1101,22 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 			Sorted:    true,
 			Priority:  DEFAULT_PRIORITY,
 		}
-	case map[interface{}]interface{}:
-		if err := r.loadObjectFields(v, v, paths); err != nil {
+	case map[string]interface{}:
+		newMap := make(map[interface{}]interface{})
+		for key, val := range v {
+			newMap[key] = val
+		}
+
+		if err := r.loadObjectFields(v, newMap, paths); err != nil {
 			return err
 		}
 	}
 
 	if foundMatcher != nil {
-		config := &FieldMatcherConfig{
+		r.AddMatcherConfig(&FieldMatcherConfig{
 			Matcher:       foundMatcher,
 			ObjectKeyPath: paths,
-		}
-		r.Config = append(r.Config, config)
+		})
 	}
 
 	switch val := foundMatcher.(type) {
@@ -1100,17 +1131,21 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 
 func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, parentNode interface{}, fields []interface{}, paths FieldMatcherPath) error {
 	for i, arrayNode := range fields {
-		var pathStack []FieldPathKey
+		var pathStack []FieldMatcherKey
 		pathStack = append(pathStack, paths.Keys...)
-		pathStack = append(pathStack, FieldPathKey{
-			Key:          fmt.Sprintf("%v", i),
-			IsArrayIndex: true,
+
+		k := fmt.Sprintf("%v", i)
+		pathStack = append(pathStack, FieldMatcherKey{
+			Name: k,
+			RealKey: JsonKey{
+				Name:           k,
+				IsArrayElement: true,
+			},
 		})
 
 		newPaths := FieldMatcherPath{
-			Keys:           pathStack,
-			IsArrayElement: true,
-			Sorted:         m.Sorted,
+			Keys:   pathStack,
+			Sorted: m.Sorted,
 		}
 
 		fieldNode, ok := arrayNode.(map[interface{}]interface{})
@@ -1129,26 +1164,50 @@ func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, parentNode interface{
 
 func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[interface{}]interface{}, paths FieldMatcherPath) error {
 	for k := range fields {
-		var pathStack []FieldPathKey
+		var pathStack []FieldMatcherKey
 		pathStack = append(pathStack, paths.Keys...)
-		pathStack = append(pathStack, FieldPathKey{
-			Key:          k.(string),
-			IsArrayIndex: false,
+
+		var target interface{}
+		keyDisplayName := k.(string)
+		realKey := keyDisplayName
+
+		if strings.HasPrefix(keyDisplayName, FIELD_KEY_PREFIX) {
+			sanitized := strings.TrimPrefix(keyDisplayName, FIELD_KEY_PREFIX)
+			keys := SplitJsonPath(sanitized)
+			realKey = keys[0].Name
+			keyDisplayName = realKey
+			tempStore := make(map[string]interface{})
+			PutJsonValue(tempStore, sanitized, fields[k])
+			target, _ = GetJsonValue(tempStore, keys[0].Name)
+		} else {
+			target = fields[k]
+		}
+
+		if strings.Contains(keyDisplayName, ".") {
+			keyDisplayName = "`" + keyDisplayName + "`"
+		}
+
+		pathStack = append(pathStack, FieldMatcherKey{
+			Name: keyDisplayName,
+			RealKey: JsonKey{
+				Name: realKey,
+			},
 		})
 
 		newPaths := FieldMatcherPath{
-			Keys:           pathStack,
-			IsArrayElement: paths.IsArrayElement,
-			Sorted:         paths.Sorted,
+			Keys:   pathStack,
+			Sorted: paths.Sorted,
 		}
 
-		fieldNode, ok := fields[k].(map[interface{}]interface{})
+		// only yaml defined objects should use the non-simplified loading
+		// json objects can bypass this since those are internally generated in specific
+		// cases.
+		fieldNode, ok := target.(map[interface{}]interface{})
 		if !ok {
-			if err := r.loadSimplifiedField(parentNode, fields[k], newPaths); err != nil {
+			if err := r.loadSimplifiedField(parentNode, target, newPaths); err != nil {
 				return err
 			}
 		} else {
-
 			if err := r.loadField(parentNode, fieldNode, newPaths); err != nil {
 				return err
 			}
@@ -1248,7 +1307,7 @@ func (r *ResponseMatcher) validateEmpty(response interface{}) (isValid bool) {
 }
 
 // Given an input key, return a JSON node representing the key contents
-type KeyProcessor func(key FieldPathKey) interface{}
+type KeyProcessor func(key JsonKey) interface{}
 
 func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response interface{}, keyProcessor KeyProcessor) ResponseMatcherResults {
 	var results []*FieldMatcherResult
@@ -1273,11 +1332,14 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 	}
 
 	for _, p := range keys {
+
+		jsonKey := p.RealKey
+
 		// If a key process is provided, utilize that to locate specific nodes
 		// If no node is returned, then fallback to regular object iteration
 		// for the current key.
 		if keyProcessor != nil {
-			if keyResult := keyProcessor(p); keyResult != nil {
+			if keyResult := keyProcessor(jsonKey); keyResult != nil {
 				node = keyResult
 				continue
 			}
@@ -1285,7 +1347,7 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 
 		switch t := node.(type) {
 		case map[string]interface{}:
-			if tempNode, ok := t[p.Key]; ok {
+			if tempNode, ok := t[jsonKey.Name]; ok {
 				node = tempNode
 			} else {
 				node = nil
@@ -1293,7 +1355,7 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 			}
 		case []interface{}:
 			if matcher.ObjectKeyPath.Sorted {
-				index, err := strconv.ParseInt(p.Key, 10, 32)
+				index, err := strconv.ParseInt(jsonKey.Name, 10, 32)
 				if err != nil {
 					return ResponseMatcherResults{false, results, false, err}
 				}
@@ -1309,7 +1371,7 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 				// We will cache the node that was found so that subsequent validations on the same object
 				// will actually be performed on the node that matched the previous validation. Otherwise, generic
 				// validations may pick out other nodes that are not related to what was expected.
-				result := r.depthMatch(t, matcher, pathStr, p.Key)
+				result := r.depthMatch(t, matcher, pathStr, jsonKey.Name)
 				if result.FoundNode.Status && result.FoundNode.MatchedNodeKey {
 					node = result.FoundNode.Node
 					pathStr = result.FoundNode.NodePath
@@ -1333,16 +1395,12 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 		return ResponseMatcherResults{false, results, false, err}
 	}
 
-	for k := range ds {
-		(*r.DS)[k] = ds[k]
-	}
-
-	if node == nil && matcher.ObjectKeyPath.IsArrayElement {
-		pathStr += "[x]"
+	for k := range ds.Store {
+		(*r.DS).Put(k, ds.Store[k])
 	}
 
 	results = append(results, &FieldMatcherResult{
-		ObjectKeyPath:   matcher.ObjectKeyPath.GetPath(),
+		ObjectKeyPath:   matcher.ObjectKeyPath.GetDisplayPath(),
 		Status:          status,
 		Error:           matcher.Matcher.Error(),
 		ShowExtendedMsg: matcher.ObjectKeyPath.IsExecutable || len(matcher.Matcher.Error()) >= 64,
@@ -1387,10 +1445,10 @@ func (r *ResponseMatcher) MatchHtml(response interface{}) (bool, []*FieldMatcher
 	// Each nested query selector will be applied to the results of the previous selector.
 	processor := func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
 		var curSelection *goquery.Selection
-		return r.matchConfig(matcher, response, func(p FieldPathKey) interface{} {
+		return r.matchConfig(matcher, response, func(p JsonKey) interface{} {
 			var resultNode interface{}
-			if strings.HasPrefix(p.Key, "<") && strings.HasSuffix(p.Key, ">") {
-				newKey := strings.TrimPrefix(p.Key, "<")
+			if strings.HasPrefix(p.Name, "<") && strings.HasSuffix(p.Name, ">") {
+				newKey := strings.TrimPrefix(p.Name, "<")
 				newKey = strings.TrimSuffix(newKey, ">")
 				if curSelection == nil {
 					curSelection = docReader.Find(newKey)
