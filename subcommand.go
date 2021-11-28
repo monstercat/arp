@@ -11,15 +11,54 @@ const (
 	CMD_SUFFIX = ")"
 )
 
-func executeCommandStr(input string) (string, error) {
-	var tokens []string
-	inQuote := false
-	argStartPos := 0
+type TokenQuoteState struct {
+	InDoubleQuote   bool
+	InSingleQuote   bool
+	InBacktickQuote bool
+}
+
+func (ts *TokenQuoteState) InQuote() bool {
+	return ts.InSingleQuote || ts.InDoubleQuote || ts.InBacktickQuote
+}
+
+func (ts *TokenQuoteState) IsQuote(char uint8) bool {
+	return char == '"' || char == '\'' || char == '`'
+}
+
+func (ts *TokenQuoteState) SetQuote(char uint8) {
+	switch char {
+	case '"':
+		ts.InDoubleQuote = true
+	case '\'':
+		ts.InSingleQuote = true
+	case '`':
+		ts.InBacktickQuote = true
+	}
+}
+
+func (ts *TokenQuoteState) UnsetQuote(char uint8) {
+	switch char {
+	case '"':
+		ts.InDoubleQuote = false
+	case '\'':
+		ts.InSingleQuote = false
+	case '`':
+		ts.InBacktickQuote = false
+	}
+}
+
+func splitStringTokens(input string) []string {
+
+	quoteState := TokenQuoteState{}
+	tokenStartPos := 0
 	escaped := false
 
-	realCmd := input[len(CMD_PREFIX) : len(input)-len(CMD_SUFFIX)]
-	for i := 0; i < len(realCmd) && argStartPos < len(realCmd); i++ {
-		char := realCmd[i]
+	// First split string by words or quoted blocks
+	var tokens []string
+	sanitizedInput := strings.TrimSpace(input)
+
+	for i := 0; i < len(sanitizedInput) && tokenStartPos < len(sanitizedInput); i++ {
+		char := input[i]
 
 		if char == '\\' {
 			escaped = true
@@ -32,40 +71,53 @@ func executeCommandStr(input string) (string, error) {
 		}
 
 		// regular arguments can be separated by spaces if not quoted
-		if !inQuote && char == ' ' && argStartPos != i {
+		if !quoteState.InQuote() && char == ' ' && tokenStartPos != i {
 			// no +1 on token end to exclude the space delimiter
-			tokens = append(tokens, realCmd[argStartPos:i])
-			argStartPos = i + 1
-		} else if inQuote && char == ' ' {
+			t := strings.TrimSpace(sanitizedInput[tokenStartPos:i])
+			if t != "" {
+				tokens = append(tokens, t)
+			}
+			tokenStartPos = i
+		} else if quoteState.InQuote() && char == ' ' {
 			// if we're in a quote and hit a space, we can ignore it
 			continue
-		} else if !inQuote && char == '"' {
+		} else if !quoteState.InQuote() && quoteState.IsQuote(char) {
 			//if we aren't in a quoted string and we hit a quote, then we can continue
-			inQuote = true
-		} else if inQuote && char == '"' {
-			// if we are in a quote and we hit another quote, we'll treat that as the closing one
-			// +1 to include the end quote for our token
-			tokens = append(tokens, realCmd[argStartPos:i+1])
-			inQuote = false
+			quoteState.SetQuote(char)
+		} else if quoteState.InQuote() && quoteState.IsQuote(char) {
+			quoteState.UnsetQuote(char)
+			// make sure we're not in nested quotes of mixed types
+			if quoteState.InQuote() {
+				continue
+			}
+
+			t := strings.TrimSpace(sanitizedInput[tokenStartPos : i+1])
+			if t != "" {
+				tokens = append(tokens, t)
+			}
+
 			// make our next argument starting position skip this closing quote
-			argStartPos = i + 1
+			tokenStartPos = i + 1
 		}
 	}
 
-	if argStartPos < len(realCmd) {
-		tokens = append(tokens, realCmd[argStartPos:])
+	if tokenStartPos < len(sanitizedInput) {
+		t := strings.TrimSpace(sanitizedInput[tokenStartPos:])
+		if t != "" {
+			tokens = append(tokens, t)
+		}
 	}
 
 	// Promote all nested quotes 'up' one level
-	var args []string
+	var promotedStrings []string
 	for _, s := range tokens {
 		newToken := ""
 		// if the whole token is quoted, then we can remove them and promote the nested quotes
-		if s[0] == '"' && s[len(s)-1] == '"' {
+		if quoteState.IsQuote(s[0]) && quoteState.IsQuote(s[len(s)-1]) {
 			s = s[1 : len(s)-1]
 		} else {
 			// otherwise, leave the string alone.
-			args = append(args, s)
+			promotedStrings = append(promotedStrings, s)
 			continue
 		}
 
@@ -102,11 +154,19 @@ func executeCommandStr(input string) (string, error) {
 				i = escapeEnd - 1
 				continue
 			}
-
 			newToken += string(s[i])
-
 		}
-		args = append(args, newToken)
+		promotedStrings = append(promotedStrings, newToken)
+	}
+
+	return promotedStrings
+}
+
+func executeCommandStr(input string) (string, error) {
+	realCmd := input[len(CMD_PREFIX) : len(input)-len(CMD_SUFFIX)]
+	args := splitStringTokens(realCmd)
+	if len(args) == 0 {
+		return "", nil
 	}
 
 	cmd := exec.Command(args[0], args[1:]...)

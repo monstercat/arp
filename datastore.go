@@ -43,7 +43,8 @@ func extractVariablePath(variableName string) []VariableKey {
 				if hasIndex {
 					index = ""
 				} else {
-					expandedKeys = append(expandedKeys, VariableKey{Name: k[:i], IsArray: true})
+					n := strings.TrimSpace(k[:i])
+					expandedKeys = append(expandedKeys, VariableKey{Name: n, IsArray: true})
 				}
 				hasIndex = true
 
@@ -53,11 +54,13 @@ func extractVariablePath(variableName string) []VariableKey {
 			if c != ']' && hasIndex {
 				index += string(c)
 			} else if c == ']' {
-				expandedKeys = append(expandedKeys, VariableKey{Name: index})
+				n := strings.TrimSpace(index)
+				expandedKeys = append(expandedKeys, VariableKey{Name: n})
 			}
 		}
 		if !hasIndex {
-			expandedKeys = append(expandedKeys, VariableKey{Name: k})
+			n := strings.TrimSpace(k)
+			expandedKeys = append(expandedKeys, VariableKey{Name: n})
 		}
 	}
 	expandedKeys[len(expandedKeys)-1].IsLast = true

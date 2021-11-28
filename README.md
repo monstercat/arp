@@ -1484,8 +1484,37 @@ The above example will execute in the following order:
 2. `$(/bin/echo first $(/bin/echo "second")) -> [$(/bin/echo "second") -> second] -> $(/bin/echo first second)`
 3. `$(/bin/echo first second) -> "first second"`
 
-This unfortunately means that you won't be able to use subshells if you're looking to straight up embed a complicated bash command. In such a scenario it's recommended to put your command in an external script and 
+This unfortunately means that you won't be able to use bash subshells if you're looking to straight up embed a complicated bash command. This recursive execution strategy will allow for future expansion with built-in methods 
+that don't exist outside of arp. In such a scenario it's recommended to put your command in an external script and 
 invoke that script as a dynamic input.
+
+### Using '|' and '>'
+YAML has built in operators to allow strings that span multiple lines. These operators can be used to improve readability of longer embedded scripts.
+> Values can span multiple lines using | or >. Spanning multiple lines using a “Literal Block Scalar” | will include the newlines and any trailing spaces. Using a “Folded Block Scalar” > will fold newlines to spaces; it’s used to make what would otherwise be a very long line easier to read and edit. In either case the indentation will be ignored. - https://docs.ansible.com/ansible/latest/reference_appendices/YAMLSyntax.html
+
+```yaml
+    input:
+      # Using '|' will preserve the spacing
+      someString: |
+        $(/bin/bash -c `
+          export SOMEVAR="yay"
+          echo '$SOMEVAR'
+          echo "$SOMEVAR"
+          echo "What have I done?"
+
+          if [ "$SOMEVAR" = "yay" ]; then
+            echo "IF WAS TRUE!"
+          fi
+        `)
+```
+
+generates the following input:
+```json
+  Input: { 
+   "someStrg": "$SOMEVAR\nyay\nWhat have I done?\nIF WAS TRUE!\n"
+  }
+...
+```
 
 ---
 
