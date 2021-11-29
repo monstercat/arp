@@ -1,14 +1,18 @@
 package arp
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
 const (
 	MaxResultMsgLength = 92
+	MaxResponseLines   = 80
 )
 
 type ReportOptions struct {
@@ -105,6 +109,32 @@ func PrintIndentedLn(indentLevel int, format string, args ...interface{}) {
 	newArgs = append(newArgs, args...)
 
 	fmt.Printf(indentFmt, newArgs...)
+}
+
+// PageText will show the first numLines of text in a string and dump
+// the entire input string to a temporary file for later review.
+func PageText(input string, numLines int) string {
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	curLine := 0
+
+	output := ""
+	for curLine < numLines && scanner.Scan() {
+		output += scanner.Text() + "\n"
+		curLine++
+	}
+
+	if curLine >= numLines {
+		output += "..."
+		if f, err := os.CreateTemp("", "response-dump-*.json"); err == nil {
+			f.WriteString(input)
+			f.Close()
+			output += fmt.Sprintf("\nRemaining response data has been saved to: %v\n", f.Name())
+		}
+
+		return output
+	}
+
+	return output
 }
 
 func separator(c Colorizer) string {
@@ -256,7 +286,8 @@ func PrintSingleTestReport(opts ReportOptions, test *TestResult) {
 		PrintIndentedLn(2, "Input: %v\n", string(inputJson))
 
 		data, _ := json.MarshalIndent(test.Response, IndentStr(2), " ")
-		PrintIndentedLn(2, "Response: %v\n\n", string(data))
+		responsePage := PageText(string(data), MaxResponseLines)
+		PrintIndentedLn(2, "Response: %v\n\n", responsePage)
 
 		PrintIndentedLn(2, "Extended Output:\n")
 		for _, f := range test.Fields {
