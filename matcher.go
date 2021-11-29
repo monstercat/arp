@@ -47,6 +47,7 @@ const (
 	ArrayLengthErrFmt      = "Expected array with length %v %v but found length %v instead."
 	ReceivedNullErrFmt     = "Received null value when non-null value was expected"
 	ExpectedNullErrFmt     = "Expected null value when non-null value was returned"
+	ExpectedNullSuccessFmt = "[Expected] %v"
 	MalformedDefinitionFmt = "\nMalformed '%v' field detected on %v"
 	MismatchedMatcher      = "Test expected a value type matching '%v' but response field is of type '%v'."
 	BadVarMatcherFmt       = "Failed to resolve variable within matcher: %v"
@@ -298,7 +299,7 @@ func handleExistence(node interface{}, exists bool, canBeNull bool) (bool, bool,
 	if node == nil && exists && !canBeNull {
 		return false, false, ReceivedNullErrFmt
 	} else if node == nil && !exists {
-		return true, false, ""
+		return true, false, fmt.Sprintf(ExpectedNullSuccessFmt, node)
 	} else if node != nil && !exists {
 		return false, false, ExpectedNullErrFmt
 	}
@@ -948,6 +949,15 @@ func (m *ExecutableMatcher) SetError(error string) {
 	m.ErrorStr = error
 }
 
+func NewResponseMatcher(ds *DataStore) ResponseMatcher {
+	return ResponseMatcher{
+		DS: ds,
+		NodeCache: NodeCache{
+			Cache: make(map[string]NodeCacheObj),
+		},
+	}
+}
+
 func (r *ResponseMatcher) AddMatcherConfig(config *FieldMatcherConfig) {
 	// Do a dumb check for a duplicate matcher. This can happen
 	// when a config contains a mix of short json path defined matchers
@@ -1148,6 +1158,10 @@ func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, parentNode interface{
 			Sorted: m.Sorted,
 		}
 
+		if arrayNode == nil {
+			continue
+		}
+
 		fieldNode, ok := arrayNode.(map[interface{}]interface{})
 		if !ok {
 			if err := r.loadSimplifiedField(parentNode, arrayNode, newPaths); err != nil {
@@ -1176,15 +1190,16 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 			keys := SplitJsonPath(sanitized)
 			realKey = keys[0].Name
 			keyDisplayName = realKey
+			if strings.ContainsAny(keyDisplayName, JSON_RESERVED_CHARS) {
+				keyDisplayName = "`" + keyDisplayName + "`"
+			}
 			tempStore := make(map[string]interface{})
+			// Create a new brnach of the test config with the exploded keys pointing to our value
+			// that will be iterated to generate matchers for.
 			PutJsonValue(tempStore, sanitized, fields[k])
-			target, _ = GetJsonValue(tempStore, keys[0].Name)
+			target = tempStore[realKey]
 		} else {
 			target = fields[k]
-		}
-
-		if strings.Contains(keyDisplayName, ".") {
-			keyDisplayName = "`" + keyDisplayName + "`"
 		}
 
 		pathStack = append(pathStack, FieldMatcherKey{
@@ -1307,7 +1322,7 @@ func (r *ResponseMatcher) validateEmpty(response interface{}) (isValid bool) {
 }
 
 // Given an input key, return a JSON node representing the key contents
-type KeyProcessor func(key JsonKey) interface{}
+type KeyProcessor func(key FieldMatcherKey) interface{}
 
 func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response interface{}, keyProcessor KeyProcessor) ResponseMatcherResults {
 	var results []*FieldMatcherResult
@@ -1339,7 +1354,7 @@ func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response inte
 		// If no node is returned, then fallback to regular object iteration
 		// for the current key.
 		if keyProcessor != nil {
-			if keyResult := keyProcessor(jsonKey); keyResult != nil {
+			if keyResult := keyProcessor(p); keyResult != nil {
 				node = keyResult
 				continue
 			}
@@ -1445,11 +1460,13 @@ func (r *ResponseMatcher) MatchHtml(response interface{}) (bool, []*FieldMatcher
 	// Each nested query selector will be applied to the results of the previous selector.
 	processor := func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
 		var curSelection *goquery.Selection
-		return r.matchConfig(matcher, response, func(p JsonKey) interface{} {
+		return r.matchConfig(matcher, response, func(p FieldMatcherKey) interface{} {
 			var resultNode interface{}
-			if strings.HasPrefix(p.Name, "<") && strings.HasSuffix(p.Name, ">") {
-				newKey := strings.TrimPrefix(p.Name, "<")
+			key := p.RealKey
+			if strings.HasPrefix(key.Name, "<") && strings.HasSuffix(key.Name, ">") {
+				newKey := strings.TrimPrefix(key.Name, "<")
 				newKey = strings.TrimSuffix(newKey, ">")
+				newKey = strings.TrimSpace(newKey)
 				if curSelection == nil {
 					curSelection = docReader.Find(newKey)
 				} else {

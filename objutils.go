@@ -13,6 +13,14 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+const (
+	JSON_OBJECT_DELIM      = "."
+	JSON_INDEX_START_DELIM = "["
+	JSON_INDEX_END_DELIM   = "]"
+	JSON_INDEX_DELIM       = JSON_INDEX_START_DELIM + JSON_INDEX_END_DELIM
+	JSON_RESERVED_CHARS    = JSON_OBJECT_DELIM + JSON_INDEX_DELIM
+)
+
 func YamlToJson(i interface{}) interface{} {
 	switch x := i.(type) {
 	case map[interface{}]interface{}:
@@ -138,55 +146,31 @@ func sanitizeQuotedIndex(key string) string {
 // SplitJsonPath Splits a string formatted as a JSON accessor into its individual keys
 // with metadata. E.g. "data.someArray[1].value" -> "[data, someArray, 1, value]"
 func SplitJsonPath(jsonPath string) []JsonKey {
-	keys := SplitStringTokens(jsonPath, ".")
+	keys := SplitStringTokens(jsonPath, JSON_OBJECT_DELIM)
 
 	// Extract array indexing from the keys as their own key for iterating the datastore.
 	var expandedKeys []JsonKey
 	for _, k := range keys {
-		runes := []rune(k)
 		foundBrackets := false
-		// scan for brackets or array indexing
-		for i := 0; i < len(runes); i++ {
-			c := runes[i]
-			// if we encounter a square bracket, then scan for the key/index
-			if c == '[' && i+1 <= len(runes) {
-				index := ""
-				skipChars := 0
-				// offset by one to exclude the starting bracket
-				for v, b := range k[i+1:] {
-					if b != ']' {
-						index += string(b)
-					} else {
-						break
-					}
-					skipChars = v
-				}
+		// now that we've split out the tokens, we can remove any quotes surrounding keys
+		keyStrs := PromoteTokenQuotes(SplitStringTokens(k, JSON_INDEX_DELIM))
+		if len(keyStrs) > 0 {
+			foundBrackets = true
 
-				// test if it's a number
+			for _, ks := range keyStrs {
 				var toAdd JsonKey
-				if _, err := strconv.ParseInt(index, 10, 64); err == nil {
-					toAdd = JsonKey{Name: index, IsArrayElement: true}
+				// test if it's a number
+				if _, err := strconv.ParseInt(ks, 10, 64); err == nil {
+					toAdd = JsonKey{Name: ks, IsArrayElement: true}
 					if len(expandedKeys) > 0 {
 						// mark the previous key as an array
 						expandedKeys[len(expandedKeys)-1].IsArray = true
 					}
 				} else {
 					// otherwise its an object key
-					toAdd = JsonKey{Name: sanitizeQuotedIndex(index)}
+					toAdd = JsonKey{Name: sanitizeQuotedIndex(ks)}
 				}
-
-				// store the parent key (only on the first occurence of an indexing). There can be
-				// instances of key[index1][index2] for nested arrays
-				if !foundBrackets {
-					if parentKey := string(runes[:i]); parentKey != "" {
-						expandedKeys = append(expandedKeys, JsonKey{Name: parentKey})
-					}
-				}
-
-				// then store the associated object or index key
 				expandedKeys = append(expandedKeys, toAdd)
-				i += skipChars + 1
-				foundBrackets = true
 			}
 		}
 		// if no brackets were found then we can use the entire key

@@ -125,21 +125,9 @@ func (t *TestCase) HasTag(tagList string) bool {
 }
 
 func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
-	t.ResponseMatcher.DS = t.GlobalDataStore
-	t.ResponseMatcher.NodeCache = NodeCache{
-		Cache: map[string]NodeCacheObj{},
-	}
-
-	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
-	t.ResponseHeaderMatcher.NodeCache = NodeCache{
-		Cache: map[string]NodeCacheObj{},
-	}
-
-	t.StatusCodeMatcher.DS = t.GlobalDataStore
-	t.StatusCodeMatcher.NodeCache = NodeCache{
-		Cache: map[string]NodeCacheObj{},
-	}
-
+	t.ResponseMatcher = NewResponseMatcher(t.GlobalDataStore)
+	t.ResponseHeaderMatcher = NewResponseMatcher(t.GlobalDataStore)
+	t.StatusCodeMatcher = NewResponseMatcher(t.GlobalDataStore)
 	t.Config = *test
 
 	switch t.Config.Response.Type {

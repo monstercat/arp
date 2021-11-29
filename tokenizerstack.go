@@ -102,7 +102,6 @@ func isDelimiter(delimiters string, character rune) bool {
 // SplitStringTokens will split an input on any one of the delimiters. However, it will ignore delimiters that
 // are within quotes (single, double, or backticks) or delimiters that are escaped with a preceding backslash '\'.
 func SplitStringTokens(input string, delimiters string) []string {
-
 	quoteState := TokenQuoteState{}
 	tokenStartPos := 0
 	escaped := false
@@ -125,7 +124,7 @@ func SplitStringTokens(input string, delimiters string) []string {
 		}
 
 		// regular arguments can be separated by spaces if not quoted
-		if !quoteState.InQuote() && isDelimiter(delimiters, char) && tokenStartPos != i {
+		if !quoteState.InQuote() && isDelimiter(delimiters, char) {
 			// no +1 on token end to exclude the space delimiter
 			t := strings.TrimSpace(string(sanitizedInput[tokenStartPos:i]))
 			if t != "" {
@@ -141,18 +140,6 @@ func SplitStringTokens(input string, delimiters string) []string {
 			quoteState.SetQuote(char)
 		} else if quoteState.InQuote() && quoteState.IsQuote(char) {
 			quoteState.UnsetQuote(char)
-			// make sure we're not in nested quotes of mixed types
-			//if quoteState.InQuote() {
-			//	continue
-			//}
-
-			//t := strings.TrimSpace(string(sanitizedInput[tokenStartPos : i+1]))
-			//if t != "" {
-			//	tokens = append(tokens, t)
-			//}
-
-			// make our next argument starting position skip this closing quote
-			//tokenStartPos = i + 1
 		}
 	}
 
@@ -163,7 +150,14 @@ func SplitStringTokens(input string, delimiters string) []string {
 		}
 	}
 
-	// Promote all nested quotes 'up' one level
+	return tokens
+}
+
+// PromoteTokenQuotes will 'promote' nested quotes up one level such that the outermost wrapped quotes
+// will be removed, and all the nested escaped quotes will have their corresponding escape characters
+// removed one nested level.
+func PromoteTokenQuotes(tokens []string) []string {
+	quoteState := TokenQuoteState{}
 	var promotedStrings []string
 	for _, s := range tokens {
 		newToken := ""

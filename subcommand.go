@@ -15,7 +15,7 @@ const (
 func executeCommandStr(input string) (string, error) {
 	sanitized := []rune(input)
 	sanitized = sanitized[len(CMD_PREFIX) : len(sanitized)-len(CMD_SUFFIX)]
-	args := SplitStringTokens(string(sanitized), CMD_DELIMITER)
+	args := PromoteTokenQuotes(SplitStringTokens(string(sanitized), CMD_DELIMITER))
 	if len(args) == 0 {
 		return "", nil
 	}
