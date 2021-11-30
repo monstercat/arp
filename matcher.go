@@ -48,6 +48,7 @@ const (
 	MalformedDefinitionFmt = "\nMalformed '%v' field detected on %v"
 	MismatchedMatcher      = "Test expected a value type matching '%v' but response field is of type '%v'."
 	BadVarMatcherFmt       = "Failed to resolve variable within matcher: %v"
+	NumExpressionErrFmt    = "Expected a result evaluating to: %v %v but got %v instead"
 	BadArrayElementFmt     = "\nExpected elements on '%v' to be objects"
 	BadObjectFmt           = "\nExpected property '%v' to map to an object"
 
@@ -304,6 +305,41 @@ func handleExistence(node interface{}, exists bool, canBeNull bool) (bool, bool,
 	return false, true, ""
 }
 
+func evaluateNumExpr(exprStr string, number int64) (bool, bool, string, error) {
+	var err error
+	var status bool
+	var evaluated bool
+	message := ""
+	// order from longest string to shortest
+	for _, op := range []string{GTE, LTE, GT, LT} {
+		if strings.HasPrefix(exprStr, op) {
+			evaluated = true
+			var val int64
+			val, err = strconv.ParseInt(strings.TrimSpace(strings.ReplaceAll(exprStr, op, "")), 10, 32)
+			if err != nil {
+				return false, evaluated, "", err
+			}
+			switch op {
+			case LT:
+				status = number < val
+			case LTE:
+				status = number <= val
+			case GT:
+				status = number > val
+			case GTE:
+				status = number >= val
+			}
+
+			if !status {
+				op := strings.TrimPrefix(op, "$")
+				message = fmt.Sprintf(NumExpressionErrFmt, op, val, number)
+			}
+		}
+	}
+
+	return status, evaluated, message, err
+}
+
 func (m *IntegerMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
 	if v, ok := node[TEST_KEY_MATCHES]; ok {
 		switch val := v.(type) {
@@ -366,11 +402,14 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 		if resolvedStr == Any {
 			status = true
 		} else {
-			status, err = matchPattern(resolvedStr,
-				[]byte(strconv.FormatInt(typedResponseValue, 10)))
-
-			if !status {
-				m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolvedStr)
+			var evaluated bool
+			status, evaluated, m.ErrorStr, err = evaluateNumExpr(resolvedStr, typedResponseValue)
+			if !evaluated {
+				status, err = matchPattern(resolvedStr,
+					[]byte(strconv.FormatInt(typedResponseValue, 10)))
+				if !status {
+					m.ErrorStr = fmt.Sprintf(PatternErrFmt, typedResponseValue, resolvedStr)
+				}
 			}
 		}
 	}
@@ -724,30 +763,10 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 		case Any:
 			status = true
 		default:
-			// order from longest string to shortest
-			for _, op := range []string{GTE, LTE, GT, LT} {
-				if strings.HasPrefix(s, op) {
-					var length int64
-					length, err = strconv.ParseInt(strings.TrimSpace(strings.ReplaceAll(s, op, "")), 10, 32)
-					if err != nil {
-						return false, store, err
-					}
-					switch op {
-					case LT:
-						status = responseLength < length
-					case LTE:
-						status = responseLength <= length
-					case GT:
-						status = responseLength > length
-					case GTE:
-						status = responseLength >= length
-					}
-
-					if !status {
-						sign := strings.ReplaceAll(op, "$", "")
-						m.ErrorStr = fmt.Sprintf(ArrayLengthErrFmt, sign, length, responseLength)
-					}
-				}
+			var evaluated bool
+			status, evaluated, m.ErrorStr, err = evaluateNumExpr(s, responseLength)
+			if evaluated && !status {
+				m.ErrorStr = fmt.Sprintf("[%v] %v", TEST_KEY_LENGTH, m.ErrorStr)
 			}
 		}
 	}
