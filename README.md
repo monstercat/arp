@@ -722,7 +722,148 @@ payload:
 All objects are validated based on the keys present in the validations definition. If `MyObject` exists and the `FieldOne` property does not exist, a validation error will be raised.
 
 #### Short form
-No Short form is available for Object validations at this point in time. There is no way to determine whether an object will be a test definition or is part of the expected payload due to potential collisions with the `type` and `property` field on valid response objects.
+Short form for objects are supported *only* using a json path notation as descripted in the `JSON Notation` section below.
+
+
+### JSON Notation
+On top of the supported short forms for defining validators, it's possible to use JSON paths to automatically
+create the structural validations leading to your value of interest. JSON paths are defined with a prefix `$.` and then follow
+the dot (`.`) notation to index into objects, square brackets with positive integers for array indicies, and square brackets with strings
+also for object keys.
+
+```yaml
+payload:
+  $.MyObject.SomeArray[0].value: $any
+---
+# Is the same as using bracket notation for objects
+payload:
+  $.["MyObject"]["SomeArray"][0]["value"]: $any
+
+---
+# Is the same as
+payload:
+  $.MyObject.SomeArray[0].value:
+    type: string
+    matches: $any
+
+---    
+# Is the same as
+payload:
+  $.MyObject.SomeArray[0]:
+    type: object
+    properties:
+      value:
+        type: string
+        matches: $any
+        
+---
+# Is the same as
+payload:
+  $.MyObject.SomeArray:
+    type: array
+    length: $notEmpty
+    items:
+      - type: object
+        properties:
+          value:
+            type: string
+            matches: $any
+            
+---
+# Is the same as
+payload:
+  MyObject:
+    type: object
+    properties:
+      
+      SomeArray:
+        type: array
+        length: $notEmpty
+        
+        items:
+          - type: object
+            properties:
+              value:
+                type: string
+                matches: $any
+
+```
+
+It should be noted that all intermediary validators for nodes in the json path will be created automatically and duplicate
+validators that are created will be **ignored**. So if you wanted to define a specific length validator for `SomeArray`, then it must
+be defined first so the subsequent default ones will be ignored.
+
+
+
+```yaml
+# Validate array length and first element value using JSON dot notation
+payload:
+  # Define leading structure validations first
+  $.MyObject.SomeArray:
+    type: array
+    length: 5
+    
+  # Then define the child validations, the default validator for MyObject.SomeArray will
+  # be ignored since we've already defined it earlier.
+  $.MyObject.SomeArray[0].value: $any
+```
+
+JSON path notation will respect its position relative to its parent definition:
+
+```yaml
+payload:
+  MyObject:
+    type: object
+    properties:
+      $.SomeArray[0].value: $any
+
+# Will validate: MyObject.SomeArray[0].value
+```
+
+Array indices are treated as absolute values such that the validator is assigned **only** to the specified index position. Leading
+array indices will not have any validators created for them.
+
+```yaml
+payload:
+  $.MyObject.SomeArray[2].value: $any
+
+---
+# Is the same as
+payload:
+  MyObject:
+    type: object
+    properties:
+      SomeArray:
+        type: array
+        length: $notEmpty
+        items:
+          # no validation on 0
+          -
+          # no validation on 1
+          -
+          # validation on 2
+          - type: object
+            properties:
+              value:
+                type: string
+                matches: $any
+```
+
+You can use the square brackets to index into objects with keys that may contain special characters:
+
+```yaml
+payload:
+  $.["$.SomeString"]: $any
+  $.["This.Has.Periods"]: $any
+  $.["This[has](brackets)\"with nested quotes\""]: $any
+---
+# Would be used to match a response with a key starting with our prefix:
+{
+  "$.SomeString": "Hello,",
+  "This.Has.Periods": "World"
+}
+
+```
 
 
 ### Field Existence
@@ -1448,35 +1589,41 @@ export HOST_STAGE="Beta"
 
 ## Dynamic Inputs
 
-The `input` properties of Test Cases also have the ability to use the output of an executed command as its value. This works similarly to the behavior of variables where it'll perform a straight value replacement (and recursive execution), but uses the syntax of ```$(<path> arg1 arg2 ...)```.
+The `input` properties of Test Cases also have the ability to use the output of an executed command as its value. This works similarly to the behavior of variables where it'll perform a straight value replacement (and recursive execution), but uses the syntax of ```$(<path> arg1 arg2 ...)```. Arguments are delimited by spaces (' ') but supports the use of quotes (single, double, or backticks '`') to group multiple words into a single argument.
+
 The output is treated as a regular string and contains both the STDOUT and STDERR data. If the program encounters an error (program returns a non-zero exit code), the test case will not be executed. 
 
 For example, you can use `/bin/date` to provide the current date with your API call:
 
 ```yaml
   input:
-    date: '$(/bin/date -u -R)'
+    date: $(/bin/date -u -R)
 ```
 
 This syntax also supports the usage of variables. All variables are resolved prior to the execution of the command.
 
 ```yaml
   input:
-    something: '$(@{TEST_DIR}/myscript.sh)'
+    something: $(@{TEST_DIR}/myscript.sh)
 ```
 
 Or you can run some arbitrary shell command:
 
 ```yaml
   input:
-    result: '$(/bin/bash -c "echo \"hello, world\" | base64")'
+    result: $(/bin/bash -c "echo \"hello, world\" | base64")
+
+---
+#  use backticks or single quotes to get rid of nested quotes
+  input:
+    results: $(/bin/bash -c `echo "hello, world" | base64`)
 ```
 
 Arp will recursively execute programs provided in the input starting with the inner most `$(<command>)` allowing for execution chaining like the following:
 
 ```yaml
   input:
-    result: '$(/bin/echo $(/bin/echo "first") $(/bin/echo "second"))'
+    result: $(/bin/echo $(/bin/echo "first") $(/bin/echo "second"))
 ```
 
 The above example will execute in the following order:
@@ -1494,13 +1641,15 @@ YAML has built in operators to allow strings that span multiple lines. These ope
 
 ```yaml
     input:
-      # Using '|' will preserve the spacing
+      # Using '|' will preserve the newlines
+      # And using backticks for the outermost group allows easy use
+      # of both single and double quotes which have different behavior in bash
       someString: |
         $(/bin/bash -c `
           export SOMEVAR="yay"
           echo '$SOMEVAR'
           echo "$SOMEVAR"
-          echo "What have I done?"
+          echo "executing tests in: @{TEST_DIR}"
 
           if [ "$SOMEVAR" = "yay" ]; then
             echo "IF WAS TRUE!"

@@ -40,7 +40,7 @@ type SuiteResult struct {
 
 func NewTestSuite(testFile string, fixtures string) (*TestSuite, error) {
 	suite := &TestSuite{
-		GlobalDataStore: DataStore{},
+		GlobalDataStore: NewDataStore(),
 		File:            testFile,
 	}
 
@@ -71,12 +71,12 @@ func (t *TestSuite) InitializeDataStore(fixtures string) error {
 	}
 
 	for k := range f {
-		t.GlobalDataStore[k] = f[k]
+		t.GlobalDataStore.Put(k, f[k])
 	}
 
 	for _, env := range os.Environ() {
 		pair := strings.SplitN(env, "=", 2)
-		t.GlobalDataStore[pair[0]] = pair[1]
+		t.GlobalDataStore.Put(pair[0], pair[1])
 	}
 
 	return nil
@@ -129,7 +129,13 @@ func (t *TestSuite) LoadTests(fixtures string) (bool, error) {
 		readers = append(readers, fix)
 	}
 
-	tests, err := os.Open(t.File)
+	var tests *os.File
+	var err error
+	if t.File == "-" {
+		tests = os.Stdin
+	} else {
+		tests, err = os.Open(t.File)
+	}
 	if err != nil {
 		return false, fmt.Errorf("failed to open test file: %v - %v", t.File, err)
 	}
@@ -143,7 +149,8 @@ func (t *TestSuite) LoadTests(fixtures string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to load test file: %v - %v", t.File, err)
 	}
-	t.GlobalDataStore["TEST_DIR"], _ = filepath.Abs(filepath.Dir(t.File))
+	fp, _ := filepath.Abs(filepath.Dir(t.File))
+	t.GlobalDataStore.Put("TEST_DIR", fp)
 
 	var testSuiteCfg TestSuiteCfg
 

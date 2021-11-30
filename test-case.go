@@ -23,6 +23,7 @@ const (
 
 	CFG_RESPONSE_TYPE_BIN  = "binary"
 	CFG_RESPONSE_TYPE_JSON = "json"
+	CFG_RESPONSE_TYPE_HTML = "html"
 
 	// Mime types
 	MIME_JSON = "application/json"
@@ -84,6 +85,7 @@ type TestResult struct {
 	Fields          []*FieldMatcherResult
 	Passed          bool
 	Response        map[string]interface{}
+	RawResponse     interface{}
 	ResponseHeaders map[string]interface{}
 	RequestHeaders  http.Header
 	ResolvedRoute   string
@@ -122,13 +124,13 @@ func (t *TestCase) HasTag(tagList string) bool {
 }
 
 func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
-	t.ResponseMatcher.DS = t.GlobalDataStore
-	t.ResponseHeaderMatcher.DS = t.GlobalDataStore
-	t.StatusCodeMatcher.DS = t.GlobalDataStore
+	t.ResponseMatcher = NewResponseMatcher(t.GlobalDataStore)
+	t.ResponseHeaderMatcher = NewResponseMatcher(t.GlobalDataStore)
+	t.StatusCodeMatcher = NewResponseMatcher(t.GlobalDataStore)
 	t.Config = *test
 
 	switch t.Config.Response.Type {
-	case CFG_RESPONSE_TYPE_JSON, CFG_RESPONSE_TYPE_BIN:
+	case CFG_RESPONSE_TYPE_JSON, CFG_RESPONSE_TYPE_BIN, CFG_RESPONSE_TYPE_HTML:
 	case "":
 		t.Config.Response.Type = CFG_RESPONSE_TYPE_JSON
 	default:
@@ -145,8 +147,7 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 		t.Config.Method = "WS"
 	}
 
-	if t.Config.Method == "" {
-		// default to GET if nothing is provided
+	if t.Config.Method == "" || t.Config.Response.Type == CFG_RESPONSE_TYPE_HTML {
 		t.Config.Method = "GET"
 	}
 
@@ -160,7 +161,7 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 	sc := t.Config.Response.StatusCode
 	if sc != nil {
 		keyPath := FieldMatcherPath{
-			Keys: []FieldPathKey{{Key: CFG_RESPONSE_CODE}},
+			Keys: []FieldMatcherKey{{Name: CFG_RESPONSE_CODE, RealKey: JsonKey{Name: CFG_RESPONSE_CODE}}},
 		}
 
 		if statusMatcher, mOk := sc.(map[interface{}]interface{}); mOk {
@@ -247,50 +248,6 @@ func (t *TestCase) GetTestHeaders(inputReader *InputReader) (map[interface{}]int
 	return headersMap, nil
 }
 
-func (t *TestCase) ValidateREST(statusCode int, response map[string]interface{}, headers map[string]interface{}) (bool, []*FieldMatcherResult, error) {
-	var newResults = []*FieldMatcherResult{}
-
-	// Validate status code
-	sPassed, sResult, sErr := t.StatusCodeMatcher.Match(map[string]interface{}{
-		CFG_RESPONSE_CODE: statusCode,
-	})
-	if sErr != nil {
-		return false, sResult, sErr
-	}
-	for _, sR := range sResult {
-		sR.ObjectKeyPath = StatusCodePath
-		newResults = append(newResults, sR)
-	}
-
-	// Validate Response Data
-	status, results, err := t.ResponseMatcher.Match(response)
-	if err != nil {
-		return false, results, err
-	}
-	newResults = append(newResults, results...)
-
-	// Validate response headers
-	headerStatus, headerResults, headerErr := t.ResponseHeaderMatcher.Match(headers)
-	if headerErr != nil {
-		return false, headerResults, headerErr
-	}
-	for _, hR := range headerResults {
-		hR.ObjectKeyPath = HeadersPath + hR.ObjectKeyPath
-		newResults = append(newResults, hR)
-	}
-	// Wrap things up
-	if status && headerStatus && sPassed {
-		for k := range *t.ResponseMatcher.DS {
-			(*t.GlobalDataStore)[k] = (*t.ResponseMatcher.DS)[k]
-		}
-	}
-	return status && headerStatus && sPassed, newResults, nil
-}
-
-func (t *TestCase) ValidateGeneric(response map[string]interface{}) (bool, []*FieldMatcherResult, error) {
-	return t.ResponseMatcher.Match(response)
-}
-
 func (t *TestCase) StepExecWebsocket(step int, result *TestResult) (passed bool, remaining int, err error) {
 	defer func() { result.EndTime = time.Now().UTC() }()
 	input, err := t.GetResolvedTestInput()
@@ -301,11 +258,13 @@ func (t *TestCase) StepExecWebsocket(step int, result *TestResult) (passed bool,
 	if remaining, err = executeWebSocket(t, result, input, step); err != nil {
 		return false, remaining, err
 	}
-	result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
+	result.Passed, result.Fields, err = t.ResponseMatcher.Match(result.Response)
 	return
 }
 
 func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, err error) {
+	respParser, respValidator := LoadExtensions(nil)
+
 	result = &TestResult{
 		TestCase:  *t,
 		StartTime: time.Now().UTC(),
@@ -346,29 +305,27 @@ func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, 
 		if _, err := executeWebSocket(t, result, input, -1); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
 	} else if !t.IsRPC {
-		if err := executeRest(t, result, input); err != nil {
+		if err := executeRest(t, result, respParser, input); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.Response, result.ResponseHeaders)
 	} else {
 		if err := executeRPC(t, result, input); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
 	}
 
+	result.Passed, result.Fields, err = respValidator.Handle(t, result)
 	return result.Passed, result, err
 }
 
 func (t *TestCase) CloseWebsocket() {
-	if wsc, ok := (*t.GlobalDataStore)[DS_WS_CLIENT]; ok {
+	if wsc, ok := t.GlobalDataStore.Store[DS_WS_CLIENT]; ok {
 		c := wsc.(*websocket.Conn)
 		c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		c.Close()
 
-		delete(*t.GlobalDataStore, DS_WS_CLIENT)
+		delete(t.GlobalDataStore.Store, DS_WS_CLIENT)
 	}
 }
 
@@ -384,7 +341,7 @@ func (t *TestCase) GetWebsocketClient() (*websocket.Conn, string, error) {
 	// test to create a new connection.
 	// Otherwise, if no client exists already, we'll create a new one and connect it.
 	var client *websocket.Conn
-	if prevClient, ok := (*t.GlobalDataStore)[DS_WS_CLIENT]; !ok {
+	if prevClient, ok := t.GlobalDataStore.Store[DS_WS_CLIENT]; !ok {
 		inputHeaders := http.Header{}
 
 		headers, err := t.GetTestHeaders(nil)
@@ -401,7 +358,7 @@ func (t *TestCase) GetWebsocketClient() (*websocket.Conn, string, error) {
 		if err != nil {
 			return nil, route, fmt.Errorf("failed to start websocket client: %v", err)
 		}
-		(*t.GlobalDataStore)[DS_WS_CLIENT] = client
+		t.GlobalDataStore.Put(DS_WS_CLIENT, client)
 	} else {
 		client = prevClient.(*websocket.Conn)
 	}
