@@ -10,9 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/net/html"
 )
 
 const (
@@ -1324,7 +1321,7 @@ func (r *ResponseMatcher) validateEmpty(response interface{}) (isValid bool) {
 // Given an input key, return a JSON node representing the key contents
 type KeyProcessor func(key FieldMatcherKey) interface{}
 
-func (r *ResponseMatcher) matchConfig(matcher *FieldMatcherConfig, response interface{}, keyProcessor KeyProcessor) ResponseMatcherResults {
+func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response interface{}, keyProcessor KeyProcessor) ResponseMatcherResults {
 	var results []*FieldMatcherResult
 	var node interface{}
 	node = response
@@ -1445,55 +1442,12 @@ func (r *ResponseMatcher) Match(response interface{}) (bool, []*FieldMatcherResu
 		}, nil
 	}
 
-	return r.matchBase(response, func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
-		return r.matchConfig(matcher, response, nil)
+	return r.MatchBase(response, func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
+		return r.MatchConfig(matcher, response, nil)
 	})
 }
 
-func (r *ResponseMatcher) MatchHtml(response interface{}) (bool, []*FieldMatcherResult, error) {
-	var docReader *goquery.Document
-	if v, ok := response.(*html.Node); ok {
-		docReader = goquery.NewDocumentFromNode(v)
-	}
-
-	// HTML processor uses goquery to use jquery like selectors for locating nodes.
-	// Each nested query selector will be applied to the results of the previous selector.
-	processor := func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
-		var curSelection *goquery.Selection
-		return r.matchConfig(matcher, response, func(p FieldMatcherKey) interface{} {
-			var resultNode interface{}
-			key := p.RealKey
-			if strings.HasPrefix(key.Name, "<") && strings.HasSuffix(key.Name, ">") {
-				newKey := strings.TrimPrefix(key.Name, "<")
-				newKey = strings.TrimSuffix(newKey, ">")
-				newKey = strings.TrimSpace(newKey)
-				if curSelection == nil {
-					curSelection = docReader.Find(newKey)
-				} else {
-					curSelection = curSelection.Find(newKey)
-				}
-
-				if len(curSelection.Nodes) == 1 {
-					htmlNode, _ := getHtmlJson(curSelection.Nodes[0])
-					resultNode = htmlNode
-				} else if len(curSelection.Nodes) > 1 {
-					selectionRoot := html.Node{}
-					curSelectNode := &selectionRoot
-					for _, cNode := range curSelection.Nodes {
-						(*curSelectNode).NextSibling = cNode
-						curSelectNode = cNode
-					}
-					resultNode, _ = getHtmlJson(&selectionRoot)
-				}
-			}
-			return resultNode
-		})
-	}
-
-	return r.matchBase(response, processor)
-}
-
-func (r *ResponseMatcher) matchBase(response interface{}, matcherProcessor MatcherProcessor) (bool, []*FieldMatcherResult, error) {
+func (r *ResponseMatcher) MatchBase(response interface{}, matcherProcessor MatcherProcessor) (bool, []*FieldMatcherResult, error) {
 	// make sure we're running everything in the correct object and priority order
 	r.SortConfigs()
 	var results []*FieldMatcherResult

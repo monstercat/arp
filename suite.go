@@ -129,7 +129,13 @@ func (t *TestSuite) LoadTests(fixtures string) (bool, error) {
 		readers = append(readers, fix)
 	}
 
-	tests, err := os.Open(t.File)
+	var tests *os.File
+	var err error
+	if t.File == "-" {
+		tests = os.Stdin
+	} else {
+		tests, err = os.Open(t.File)
+	}
 	if err != nil {
 		return false, fmt.Errorf("failed to open test file: %v - %v", t.File, err)
 	}

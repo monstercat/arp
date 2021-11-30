@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/net/html"
 )
 
 const (
@@ -50,15 +49,7 @@ type WsResponseJson struct {
 	Responses []map[string]interface{} `json:"responses"`
 }
 
-func responseIsBinary(t *TestCase) bool {
-	return t.Config.Response.Type == CFG_RESPONSE_TYPE_BIN
-}
-
-func responseIsHtml(t *TestCase) bool {
-	return t.Config.Response.Type == CFG_RESPONSE_TYPE_HTML
-}
-
-func executeRest(test *TestCase, result *TestResult, input interface{}) error {
+func executeRest(test *TestCase, result *TestResult, responseHandler ResponseParserHandler, input interface{}) error {
 	client := http.Client{}
 	defer client.CloseIdleConnections()
 
@@ -119,54 +110,8 @@ func executeRest(test *TestCase, result *TestResult, input interface{}) error {
 		return fmt.Errorf("failed to convert response headers: %v\n%v", err, response.Header)
 	}
 	result.ResponseHeaders = responseHeaders
-
-	var responseJson map[string]interface{}
-	fallbackToBinary := false
-
-	if responseIsHtml(test) {
-		node, err := html.Parse(response.Body)
-		if err != nil {
-			return err
-		}
-		result.HtmlResponse = node
-		rj, err := getHtmlJson(node)
-		if err != nil {
-			return err
-		}
-		responseJson = rj
-	} else if !responseIsBinary(test) && len(response.Header.Values(HEADER_CONTENT_TYPE)) > 0 {
-		// expecting JSON response, we can assume (hopefully) that the JSON data will fit in memory
-		var responseData []byte
-		for _, t := range response.Header.Values(HEADER_CONTENT_TYPE) {
-			if strings.Contains(t, MIME_JSON) || strings.Contains(t, MIME_TEXT) {
-				var rErr error
-				responseData, rErr = ioutil.ReadAll(response.Body)
-				if rErr != nil {
-					return fmt.Errorf("failed to parse API response: %v", rErr)
-				}
-				break
-			}
-		}
-		if len(responseData) > 0 {
-			if err := json.Unmarshal(responseData, &responseJson); err != nil {
-				return fmt.Errorf("failed to unmarshal JSON response: %v", err)
-			}
-		} else {
-			// a content type header was provided and no json response was provided, fallback to binary
-			fallbackToBinary = true
-		}
-	}
-	// non-JSON response we'll need to stream from the body
-	if responseIsBinary(test) || fallbackToBinary {
-		rj, err := getBinaryJson(test.Config.Response.FilePath, !fallbackToBinary, response.Body)
-		if err != nil {
-			return err
-		}
-		responseJson = rj
-	}
-
-	result.Response = responseJson
-	return nil
+	result.Response, result.RawResponse, err = responseHandler.Handle(test, response)
+	return err
 }
 
 func executeRPC(test *TestCase, result *TestResult, input interface{}) error {

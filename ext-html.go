@@ -1,33 +1,15 @@
 package arp
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
-	"os"
+	"net/http"
+	"strings"
 
+	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/html"
 )
 
-type BinResponseJson struct {
-	Saved     string   `json:"saved"`
-	Notice    []string `json:"NOTICE,omitempty"`
-	Size      uint64   `json:"size"`
-	SHA256Sum string   `json:"sha256sum"`
-}
-
-func (bj *BinResponseJson) GenericJSON() map[string]interface{} {
-	genericJson := make(map[string]interface{})
-	b, _ := json.Marshal(bj)
-	json.Unmarshal(b, &genericJson)
-	return genericJson
-}
-
-type ByteCountWriter struct {
-	ByteCount uint64
-}
+type HtmlExt struct{}
 
 type HtmlResponseJson struct {
 	Tag        string              `json:"tag"`
@@ -44,60 +26,65 @@ func (hj *HtmlResponseJson) GenericJSON() map[string]interface{} {
 	return genericJson
 }
 
-func (w *ByteCountWriter) Write(b []byte) (int, error) {
-	bytesToWrite := len(b)
-	w.ByteCount += uint64(bytesToWrite)
-	return bytesToWrite, nil
+// Implement ResponseHandler
+func (hp *HtmlExt) Parse(response *http.Response) (map[string]interface{}, interface{}, error) {
+	node, err := html.Parse(response.Body)
+	if err != nil {
+		return nil, nil, InvalidContentType
+	}
+	rj, err := getHtmlJson(node)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return rj, node, err
 }
 
-// Convert a binary response into a JSON object that can be used to identify or compare the contents of (at a high level)
-func getBinaryJson(savePath string, isExpected bool, response io.Reader) (map[string]interface{}, error) {
-	// if we're expecting a binary response, generate a json representation of the data to use with our
-	// validation logic
-	hasher := sha256.New()
-	sizeCounter := &ByteCountWriter{}
+// Implement ResponseValidator
+func (hp *HtmlExt) Validate(test *TestCase, result *TestResult) (bool, []*FieldMatcherResult, error) {
+	response := result.RawResponse
+	rMatcher := test.ResponseMatcher
 
-	// we want to track how many bytes we're reading from the body
-	sizeReader := io.TeeReader(response, sizeCounter)
-	// and we want to pipe the output into the hasher as well
-	hashReader := io.TeeReader(sizeReader, hasher)
-	responseJson := &BinResponseJson{}
-
-	targetPath := savePath
-	var file *os.File
-	if !isExpected && targetPath == "" {
-		f, err := os.CreateTemp("", RESPONSE_PATH_FMT)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary file: %v", err)
-		}
-		file = f
+	var docReader *goquery.Document
+	if v, ok := response.(*html.Node); ok {
+		docReader = goquery.NewDocumentFromNode(v)
 	}
 
-	if targetPath != "" {
-		f, fErr := os.OpenFile(targetPath, os.O_CREATE|os.O_RDWR, 0700)
-		if fErr != nil {
-			return nil, fmt.Errorf("failed to open file %v while writing response: %v", savePath, fErr)
-		}
-		file = f
+	// HTML processor uses goquery to use jquery like selectors for locating nodes.
+	// Each nested query selector will be applied to the results of the previous selector.
+	processor := func(matcher *FieldMatcherConfig, response interface{}) ResponseMatcherResults {
+		var curSelection *goquery.Selection
+		return rMatcher.MatchConfig(matcher, response, func(p FieldMatcherKey) interface{} {
+			var resultNode interface{}
+			key := p.RealKey
+			if strings.HasPrefix(key.Name, "<") && strings.HasSuffix(key.Name, ">") {
+				newKey := strings.TrimPrefix(key.Name, "<")
+				newKey = strings.TrimSuffix(newKey, ">")
+				newKey = strings.TrimSpace(newKey)
+				if curSelection == nil {
+					curSelection = docReader.Find(newKey)
+				} else {
+					curSelection = curSelection.Find(newKey)
+				}
+
+				if len(curSelection.Nodes) == 1 {
+					htmlNode, _ := getHtmlJson(curSelection.Nodes[0])
+					resultNode = htmlNode
+				} else if len(curSelection.Nodes) > 1 {
+					selectionRoot := html.Node{}
+					curSelectNode := &selectionRoot
+					for _, cNode := range curSelection.Nodes {
+						(*curSelectNode).NextSibling = cNode
+						curSelectNode = cNode
+					}
+					resultNode, _ = getHtmlJson(&selectionRoot)
+				}
+			}
+			return resultNode
+		})
 	}
 
-	if file != nil {
-		io.Copy(file, hashReader)
-		responseJson.Saved = file.Name()
-	} else {
-		io.ReadAll(hashReader)
-	}
-
-	if !isExpected {
-		responseJson.Notice = []string{
-			"Unexpected non-JSON response was returned from this call triggering a fallback to its binary representation.",
-			"Response data has been written to the path in the 'saved' field of this object."}
-	}
-
-	responseJson.SHA256Sum = string(hex.EncodeToString(hasher.Sum(nil)))
-	responseJson.Size = sizeCounter.ByteCount
-
-	return responseJson.GenericJSON(), nil
+	return rMatcher.MatchBase(response, processor)
 }
 
 // Convert an HTML Node response into a nicer JSON representation

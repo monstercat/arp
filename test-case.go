@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/net/html"
 )
 
 const (
@@ -86,7 +85,7 @@ type TestResult struct {
 	Fields          []*FieldMatcherResult
 	Passed          bool
 	Response        map[string]interface{}
-	HtmlResponse    *html.Node
+	RawResponse     interface{}
 	ResponseHeaders map[string]interface{}
 	RequestHeaders  http.Header
 	ResolvedRoute   string
@@ -249,57 +248,6 @@ func (t *TestCase) GetTestHeaders(inputReader *InputReader) (map[interface{}]int
 	return headersMap, nil
 }
 
-func (t *TestCase) ValidateREST(statusCode int, response interface{}, headers map[string]interface{}) (bool, []*FieldMatcherResult, error) {
-	var newResults = []*FieldMatcherResult{}
-
-	// Validate status code
-	sPassed, sResult, sErr := t.StatusCodeMatcher.Match(map[string]interface{}{
-		CFG_RESPONSE_CODE: statusCode,
-	})
-	if sErr != nil {
-		return false, sResult, sErr
-	}
-	for _, sR := range sResult {
-		sR.ObjectKeyPath = StatusCodePath
-		newResults = append(newResults, sR)
-	}
-
-	// Validate Response Data
-	var status bool
-	var results []*FieldMatcherResult
-	var err error
-	if v, ok := response.(*html.Node); ok {
-		status, results, err = t.ResponseMatcher.MatchHtml(v)
-	} else {
-		status, results, err = t.ResponseMatcher.Match(response)
-	}
-	if err != nil {
-		return false, results, err
-	}
-	newResults = append(newResults, results...)
-
-	// Validate response headers
-	headerStatus, headerResults, headerErr := t.ResponseHeaderMatcher.Match(headers)
-	if headerErr != nil {
-		return false, headerResults, headerErr
-	}
-	for _, hR := range headerResults {
-		hR.ObjectKeyPath = HeadersPath + hR.ObjectKeyPath
-		newResults = append(newResults, hR)
-	}
-	// Wrap things up
-	if status && headerStatus && sPassed {
-		for k := range t.ResponseMatcher.DS.Store {
-			t.GlobalDataStore.Put(k, t.ResponseMatcher.DS.Get(k))
-		}
-	}
-	return status && headerStatus && sPassed, newResults, nil
-}
-
-func (t *TestCase) ValidateGeneric(response map[string]interface{}) (bool, []*FieldMatcherResult, error) {
-	return t.ResponseMatcher.Match(response)
-}
-
 func (t *TestCase) StepExecWebsocket(step int, result *TestResult) (passed bool, remaining int, err error) {
 	defer func() { result.EndTime = time.Now().UTC() }()
 	input, err := t.GetResolvedTestInput()
@@ -310,11 +258,13 @@ func (t *TestCase) StepExecWebsocket(step int, result *TestResult) (passed bool,
 	if remaining, err = executeWebSocket(t, result, input, step); err != nil {
 		return false, remaining, err
 	}
-	result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
+	result.Passed, result.Fields, err = t.ResponseMatcher.Match(result.Response)
 	return
 }
 
 func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, err error) {
+	respParser, respValidator := LoadExtensions(nil)
+
 	result = &TestResult{
 		TestCase:  *t,
 		StartTime: time.Now().UTC(),
@@ -355,24 +305,17 @@ func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, 
 		if _, err := executeWebSocket(t, result, input, -1); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
 	} else if !t.IsRPC {
-		if err := executeRest(t, result, input); err != nil {
+		if err := executeRest(t, result, respParser, input); err != nil {
 			return false, result, err
-		}
-		if t.Config.Response.Type != CFG_RESPONSE_TYPE_HTML {
-			result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.Response, result.ResponseHeaders)
-		} else {
-			fmt.Printf("Validating html: %v\n", result.HtmlResponse)
-			result.Passed, result.Fields, err = t.ValidateREST(result.StatusCode, result.HtmlResponse, result.ResponseHeaders)
 		}
 	} else {
 		if err := executeRPC(t, result, input); err != nil {
 			return false, result, err
 		}
-		result.Passed, result.Fields, err = t.ValidateGeneric(result.Response)
 	}
 
+	result.Passed, result.Fields, err = respValidator.Handle(t, result)
 	return result.Passed, result, err
 }
 
