@@ -125,6 +125,8 @@ func GetJsonPath(keys []JsonKey, maxDepth int) (string, []JsonKey) {
 			nodeCount++
 		} else if k.IsObject {
 			pathStr += fmt.Sprintf(".%v", k.Name)
+		} else if k.IsArray {
+			pathStr += fmt.Sprintf(".%v", k.Name)
 		} else {
 			pathStr += "." + k.Name
 			nodeCount++
@@ -150,13 +152,10 @@ func SplitJsonPath(jsonPath string) []JsonKey {
 
 	// Extract array indexing from the keys as their own key for iterating the datastore.
 	var expandedKeys []JsonKey
-	for _, k := range keys {
-		foundBrackets := false
+	for index, k := range keys {
 		// now that we've split out the tokens, we can remove any quotes surrounding keys
 		keyStrs := PromoteTokenQuotes(SplitStringTokens(k, JSON_INDEX_DELIM))
 		if len(keyStrs) > 0 {
-			foundBrackets = true
-
 			for _, ks := range keyStrs {
 				var toAdd JsonKey
 				// test if it's a number
@@ -172,10 +171,18 @@ func SplitJsonPath(jsonPath string) []JsonKey {
 				}
 				expandedKeys = append(expandedKeys, toAdd)
 			}
+		} else {
+			// check for object type hinting. Can force a path to be treated as an object just by having
+			// {} in the key name somewhere
+			isObject := strings.Contains(k, "{}")
+			expandedKeys = append(expandedKeys, JsonKey{Name: k, IsObject: isObject})
 		}
-		// if no brackets were found then we can use the entire key
-		if !foundBrackets {
-			expandedKeys = append(expandedKeys, JsonKey{Name: k})
+
+		if len(expandedKeys) > 0 && index < len(keys) {
+			// Otherwise, we can set the previous element as an object there is a subkey for it.
+			if !expandedKeys[len(expandedKeys)-1].IsArray && !expandedKeys[len(expandedKeys)-1].IsArrayElement {
+				expandedKeys[len(expandedKeys)-1].IsObject = true
+			}
 		}
 	}
 	expandedKeys[len(expandedKeys)-1].IsLast = true

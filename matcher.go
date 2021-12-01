@@ -1091,8 +1091,9 @@ func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interf
 // This cannot support resolution of datastore variables since it won't be able to determine what type matcher to use from the resolved value until the value
 // is resolved at run time.
 func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode interface{}, paths FieldMatcherPath) error {
+	typeCheck := fieldNode
 	var foundMatcher FieldMatcher
-	switch v := fieldNode.(type) {
+	switch v := typeCheck.(type) {
 	case string:
 		foundMatcher = &StringMatcher{
 			Value:    &v,
@@ -1133,9 +1134,14 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 			newMap[key] = val
 		}
 
-		if err := r.loadObjectFields(v, newMap, paths); err != nil {
+		parent := make(map[interface{}]interface{})
+		parent[TEST_KEY_PROPERTIES] = newMap
+
+		objMatcher := &ObjectMatcher{}
+		if err := objMatcher.Parse(parentNode, parent); err != nil {
 			return err
 		}
+		foundMatcher = objMatcher
 	}
 
 	if foundMatcher != nil {
@@ -1148,6 +1154,12 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 	switch val := foundMatcher.(type) {
 	case *ArrayMatcher:
 		if err := r.loadArrayFields(val, parentNode, val.Items, paths); err != nil {
+			return err
+		}
+	case *ObjectMatcher:
+		last := &paths.Keys[len(paths.Keys)-1]
+		last.RealKey.IsObject = true
+		if err := r.loadObjectFields(parentNode, val.Properties, paths); err != nil {
 			return err
 		}
 	}
@@ -1193,6 +1205,7 @@ func (r *ResponseMatcher) loadArrayFields(m *ArrayMatcher, parentNode interface{
 }
 
 func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[interface{}]interface{}, paths FieldMatcherPath) error {
+
 	for k := range fields {
 		var pathStack []FieldMatcherKey
 		pathStack = append(pathStack, paths.Keys...)
@@ -1209,15 +1222,16 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 			if strings.ContainsAny(keyDisplayName, JSON_RESERVED_CHARS) {
 				keyDisplayName = "`" + keyDisplayName + "`"
 			}
-			tempStore := make(map[string]interface{})
+
 			// Create a new brnach of the test config with the exploded keys pointing to our value
 			// that will be iterated to generate matchers for.
+			tempStore := make(map[string]interface{})
 			PutJsonValue(tempStore, sanitized, fields[k])
 			target = tempStore[realKey]
 		} else {
 			target = fields[k]
-		}
 
+		}
 		pathStack = append(pathStack, FieldMatcherKey{
 			Name: keyDisplayName,
 			RealKey: JsonKey{
@@ -1409,7 +1423,9 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 					// add all parent nodes leading up to the result to our cafmt.che so we can
 					// look them up without having to search again.
 					for i, chainNode := range result.NodeChain {
+
 						cachepath, _ := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)
+
 						r.NodeCache.Cache[cachepath] = NodeCacheObj{
 							Node: chainNode.Node,
 						}
