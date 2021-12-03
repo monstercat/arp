@@ -29,6 +29,10 @@ func (s *TokenStack) Pop() *TokenStackFrame {
 	return &result
 }
 
+func (s *TokenStack) Size() int {
+	return len(s.Frames)
+}
+
 // Parse Extracts tokens that are wrapped between a predetermined prefix and suffix
 // tokens are stored in the order from the inner-most nested out
 func (s *TokenStack) Parse(input string, prefix string, suffix string) {
@@ -37,8 +41,19 @@ func (s *TokenStack) Parse(input string, prefix string, suffix string) {
 
 	runes := []rune(input)
 
+	escapeNextChar := false
 	for i := 0; i < len(runes); i++ {
 		char := runes[i]
+		if char == '\\' {
+			escapeNextChar = true
+			continue
+		}
+
+		if escapeNextChar {
+			escapeNextChar = false
+			continue
+		}
+
 		if strings.HasPrefix(string(runes[i:]), prefix) {
 			nestLevel := 0
 			if curStackFrame != nil {

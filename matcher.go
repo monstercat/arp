@@ -37,6 +37,7 @@ const (
 	TEST_EXEC_KEY_RETURN_CODE = "returns"
 	TEST_EXEC_KEY_BIN_PATH    = "bin"
 	TEST_EXEC_KEY_ARGS        = "args"
+	TEST_EXEC_KEY_CMD         = "cmd"
 
 	ValueErrFmt            = "Expected value '%v' did not match the actual value '%v'"
 	PatternErrFmt          = "Failed to match actual value '%v' with expected pattern: '%v'"
@@ -129,6 +130,7 @@ type ObjectMatcher struct {
 
 type ExecutableMatcher struct {
 	ReturnCode *int
+	Cmd        string
 	BinPath    string
 	PrgmArgs   []string
 	ErrorStr   string
@@ -857,27 +859,38 @@ func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]i
 		}
 	}
 
-	// path of the program to execute
-	if binPath, ok := node[TEST_EXEC_KEY_BIN_PATH]; ok {
-		if p, pOk := binPath.(string); pOk {
-			m.BinPath = p
+	// One-liner command (same as with dynamic inputs)
+	if cmdStr, ok := node[TEST_EXEC_KEY_CMD]; ok {
+		if s, sOk := cmdStr.(string); sOk {
+			m.Cmd = s
+			fmt.Printf("Got command: %v\n", m.Cmd)
 		} else {
-			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_BIN_PATH, TYPE_STR), parentNode))
+			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_CMD, TYPE_STR), parentNode))
 		}
-	}
-
-	// collect the arguments to run
-	if prgmArgs, ok := node[TEST_EXEC_KEY_ARGS]; ok {
-		if args, aOk := prgmArgs.([]interface{}); aOk {
-			for _, a := range args {
-				if curArg, cAOk := a.(string); cAOk {
-					m.PrgmArgs = append(m.PrgmArgs, curArg)
-				} else {
-					return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_ARGS, TYPE_STR), parentNode))
-				}
+	} else {
+		//Otherwise, if no cmd string is provided, fall back to the split binary argument syntax
+		// path of the program to execute
+		if binPath, ok := node[TEST_EXEC_KEY_BIN_PATH]; ok {
+			if p, pOk := binPath.(string); pOk {
+				m.BinPath = p
+			} else {
+				return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_BIN_PATH, TYPE_STR), parentNode))
 			}
-		} else {
-			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_ARGS, TYPE_ARRAY), parentNode))
+		}
+
+		// collect the arguments to run
+		if prgmArgs, ok := node[TEST_EXEC_KEY_ARGS]; ok {
+			if args, aOk := prgmArgs.([]interface{}); aOk {
+				for _, a := range args {
+					if curArg, cAOk := a.(string); cAOk {
+						m.PrgmArgs = append(m.PrgmArgs, curArg)
+					} else {
+						return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_ARGS, TYPE_STR), parentNode))
+					}
+				}
+			} else {
+				return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_ARGS, TYPE_ARRAY), parentNode))
+			}
 		}
 	}
 
@@ -906,48 +919,69 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 		}
 	}
 
-	resolvedBinPath, err := datastore.ExpandVariable(m.BinPath)
-	if err != nil {
-		return false, store, fmt.Errorf(BadVarMatcherFmt, m.BinPath)
-	}
+	var status bool
 
-	// resolve variables in the program
-	resolvedArgs, argErr := datastore.RecursiveResolveVariables(m.PrgmArgs)
-	if argErr != nil {
-		return false, store, fmt.Errorf(BadVarMatcherFmt, m.PrgmArgs)
-	}
-
-	argArray, aOk := resolvedArgs.([]interface{})
-	if !aOk {
-		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_ARRAY, reflect.TypeOf(resolvedArgs))
-		return false, store, nil
-	}
-
-	var argStrings []string
-	for _, aA := range argArray {
-		if s, isStr := aA.(string); isStr {
-			argStrings = append(argStrings, s)
-		} else {
-			b, _ := json.Marshal(aA)
-			argStrings = append(argStrings, string(b))
+	if m.Cmd == "" {
+		resolvedBinPath, err := datastore.ExpandVariable(m.BinPath)
+		if err != nil {
+			return false, store, fmt.Errorf(BadVarMatcherFmt, m.BinPath)
 		}
-	}
 
-	status := true
-	cmd := exec.Command(resolvedBinPath.(string), argStrings...)
+		// resolve variables in the program
+		resolvedArgs, argErr := datastore.RecursiveResolveVariables(m.PrgmArgs)
+		if argErr != nil {
+			return false, store, fmt.Errorf(BadVarMatcherFmt, m.PrgmArgs)
+		}
 
-	result, err := cmd.CombinedOutput()
-	sanitizedResult := string(result)
+		argArray, aOk := resolvedArgs.([]interface{})
+		if !aOk {
+			m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_ARRAY, reflect.TypeOf(resolvedArgs))
+			return false, store, nil
+		}
 
-	if m.ReturnCode != nil {
-		status = *m.ReturnCode == cmd.ProcessState.ExitCode()
-	}
+		var argStrings []string
+		for _, aA := range argArray {
+			if s, isStr := aA.(string); isStr {
+				argStrings = append(argStrings, s)
+			} else {
+				b, _ := json.Marshal(aA)
+				argStrings = append(argStrings, string(b))
+			}
+		}
 
-	if !status && err != nil {
-		m.ErrorStr = fmt.Sprintf("[%v]\n %v", err.Error(), sanitizedResult)
-		status = false
+		status := true
+		cmd := exec.Command(resolvedBinPath.(string), argStrings...)
+
+		result, err := cmd.CombinedOutput()
+		sanitizedResult := string(result)
+
+		if m.ReturnCode != nil {
+			status = *m.ReturnCode == cmd.ProcessState.ExitCode()
+		}
+
+		if !status && err != nil {
+			m.ErrorStr = fmt.Sprintf("[%v]\n %v", err.Error(), sanitizedResult)
+			status = false
+		} else {
+			m.ErrorStr = sanitizedResult
+		}
+
 	} else {
-		m.ErrorStr = sanitizedResult
+		resolvedCmd, err := datastore.ExpandVariable(m.Cmd)
+		if err != nil {
+			return false, store, fmt.Errorf(BadVarMatcherFmt, m.Cmd)
+		}
+		status = true
+		result, err := ExecuteCommand(resolvedCmd.(string))
+		if err != nil {
+			status = false
+			m.ErrorStr = fmt.Sprintf("[%v]\n %v", err, result)
+		} else {
+			m.ErrorStr = strings.TrimSpace(result.(string))
+			if m.ErrorStr == "" {
+				m.ErrorStr = "[status 0]"
+			}
+		}
 	}
 
 	return status, store, nil

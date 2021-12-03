@@ -1162,6 +1162,9 @@ You can specify an external validator if none of the above built in ones are suf
 
 The main limitation is that all response values that are to be passed into external executables must be representable as strings. For binary responses, this can be achieved by using the built in mechanisms to save the binary data to a file and pass that file path into to the external validator.
 
+By default the validator WILL NOT FAIL for non-0 exit codes. An explicit validator on the `returns` field is required to do so
+in this situation.
+
 #### Binary Data
 
 Here is a modified form of the file download example that passes in the downloaded file to an external executable:
@@ -1229,7 +1232,7 @@ tests:
                   - *ws_resp1
 ```
 
-#### Non-Binary Resopnse Data
+#### Non-Binary Response Data
 For non-binary data that isn't being written to a file, there is no pre-determined string (like a filepath) that can be used to pass the value in as an argument to the external program. This can be solved with the `storeAs` field of the validator to set a data store variable with the value that can then be referenced in the arguments array.
 
 Mirroring the above websocket test, lets modifiy it so it doesn't need to write any file. Suppose we call the server endpoint that echos everything we send back as base64, and now
@@ -1287,6 +1290,37 @@ tests:
                   - 'Hello, world'
 ```
 
+#### Inline Command String
+
+If you prefer to invoke your external validator as a single string rather than split across `bin` and `arg`, you can do so with the
+`cmd` field using the same syntax that `Dynamic Inputs` support.
+
+**Warning** this syntax WILL FAIL on non-zero exit codes unlike the split bin/args syntax above.
+```yaml
+tests:
+  - name: Base64 Echo Testing
+    description: Make a websocket call that echos the input as base64
+
+    # we are now calling an API that will echo everything back in base64
+    route: ws://localhost:8080/base64
+    websocket: true
+    input:
+      requests: 
+        - type: text
+          payload: Hello, world
+          response: text
+    response:
+      payload:
+        responses:
+          - type: object
+            properties:
+              payload:
+                type: external
+                # store the response in the data store
+                storeAs: encoded_response
+                # One liner that will fail on non-zero exit codes
+                cmd: $(@{TEST_DIR}/checkBase64.sh '@{encoded_response}' 'Hello, World')
+```
 
 
 ## Test Tags
