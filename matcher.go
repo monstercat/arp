@@ -1318,6 +1318,10 @@ func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConf
 			if result.FoundNode.Status {
 				if !result.FoundNode.MatchedNodeKey && k == key {
 					result.FoundNode.MatchedNodeKey = true
+				} else {
+					// if a match was found and the key doesn't match, then continue searching.
+					// At the very least, the immediate key to the result node should match
+					continue
 				}
 				result.NodeChain = append(result.NodeChain, &DepthMatchResponseNode{
 					Node:     node,
@@ -1445,6 +1449,11 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 					node = nil
 				}
 			} else {
+				// skip the current jsonKey if it is representing an actual array index number. Since we're performing
+				// a search, we don't need to match on this at all and should use the next available object field key
+				if jsonKey.IsArrayElement {
+					continue
+				}
 				// For unsorted arrays, we end up performing a depth first search until we find a node that passes
 				// the validation.
 				// We will cache the node that was found so that subsequent validations on the same object
@@ -1465,6 +1474,7 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 						}
 					}
 				} else {
+					node = nil
 					matcher.Matcher.SetError("Failed locate node")
 				}
 			}
