@@ -199,13 +199,14 @@ func interactivePrompt(showOpts bool, canRetry bool, websocketMode bool) {
 		"d) Dump all values in data store",
 		"x) Step through tests until next failure",
 		"q) Hot reload test file",
+		"y) Print Test Response",
 		"*) Evaluate varaiable or inline command. e.g. @{host}, $(date -u -R)",
 	}
 
 	if showOpts {
 		fmt.Printf("\nInput options:\n")
 		for _, o := range options {
-			if strings.HasPrefix(o, "r)") && !canRetry {
+			if (strings.HasPrefix(o, "r)") || strings.HasPrefix(o, "y)")) && !canRetry {
 				continue
 			}
 
@@ -258,6 +259,11 @@ func interactiveInput(tests []*TestCase, curTest int, subTest bool, result *Test
 			return StepInput{FallThrough: true, StepThroughToError: true}
 		case "q":
 			return StepInput{HotReload: true}
+		case "y":
+			if canRetry {
+				pretty, _ := json.MarshalIndent(result.Response, "", IndentStr(1))
+				fmt.Printf("%v\n", string(pretty))
+			}
 		default:
 			expanded, err := tests[curTest].GlobalDataStore.ExpandVariable(sanitized)
 			if err != nil {
