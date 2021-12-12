@@ -12,11 +12,13 @@ import (
 )
 
 const (
-	MissingDSKeyFmt   = "Attempted to retrieve data from data store that does not exist: key: %v"
-	BadIndexDSFmt     = "Attempted to index into a data store value with a non-positive or non-integer value: %v"
-	IndexExceedsDSFmt = "Index for data store value exceeds its max length: %v"
-	StatusCodePath    = "response.StatusCode"
-	HeadersPath       = "response.Header"
+	MissingDSKeyFmt    = "Attempted to retrieve data from data store that does not exist: key: %v"
+	BadIndexDSFmt      = "Attempted to index into a data store value with a non-positive or non-integer value: %v"
+	PrevTestFailMsg    = "Test skipped due to a previous unrecoverable test execution error"
+	TestFailMsgTrailer = ": Remaining tests within suite will automatically fail"
+	IndexExceedsDSFmt  = "Index for data store value exceeds its max length: %v"
+	StatusCodePath     = "response.StatusCode"
+	HeadersPath        = "response.Header"
 )
 
 type TestSuiteCfg struct {
@@ -185,7 +187,9 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 		Total:   len(t.Tests),
 	}
 
-	for testIndex, test := range t.Tests {
+	var criticalError error
+
+	for _, test := range t.Tests {
 		if test.Config.ExitOnRun {
 			break
 		}
@@ -194,11 +198,16 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 			fmt.Printf(">> In Progress: %v\n", test.Config.Name)
 		}
 
-		passed, results, err := test.Execute(testTags)
-		if err != nil {
-			fmt.Printf("<< Done: [Fail] %v -> %v\n", t.File, test.Config.Name)
-			suiteResults.Failed += len(t.Tests) - testIndex
-			return false, suiteResults, err
+		var passed bool
+		var results *TestResult
+		if criticalError == nil {
+			passed, results, criticalError = test.Execute(testTags)
+			if criticalError != nil {
+				results = test.GetStubbedFailResult(criticalError.Error() + TestFailMsgTrailer)
+			}
+		} else {
+			passed = false
+			results = test.GetStubbedFailResult(PrevTestFailMsg)
 		}
 
 		if passed {
@@ -220,5 +229,5 @@ func (t *TestSuite) ExecuteTests(testTags []string) (bool, SuiteResult, error) {
 		suiteResults.Results = append(suiteResults.Results, results)
 	}
 
-	return !anyFailed, suiteResults, nil
+	return !anyFailed, suiteResults, criticalError
 }

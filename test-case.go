@@ -262,6 +262,23 @@ func (t *TestCase) StepExecWebsocket(step int, result *TestResult) (passed bool,
 	return
 }
 
+func (t *TestCase) GetStubbedFailResult(errorMsg string) *TestResult {
+	return &TestResult{
+		TestCase:  *t,
+		StartTime: time.Now().UTC(),
+		EndTime:   time.Now().UTC(),
+		Fields: []*FieldMatcherResult{
+			{
+				Error:           errorMsg,
+				ObjectKeyPath:   "test.Error",
+				Status:          false,
+				ShowExtendedMsg: true,
+			},
+		},
+		Passed: false,
+	}
+}
+
 func (t *TestCase) Execute(testTags []string) (passed bool, result *TestResult, err error) {
 	respParser, respValidator := LoadExtensions(nil)
 
