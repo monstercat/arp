@@ -8,12 +8,9 @@ import (
 )
 
 type IntegerMatcher struct {
-	Value    *int64
-	Pattern  *string
-	Exists   bool
-	ErrorStr string
-	DSName   string
-	Priority int
+	Value   *int64
+	Pattern *string
+	FieldMatcherProps
 }
 
 func (m *IntegerMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
@@ -31,22 +28,12 @@ func (m *IntegerMatcher) Parse(parentNode interface{}, node map[interface{}]inte
 			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_KEY_MATCHES, TYPE_INT), parentNode))
 		}
 	}
-	m.DSName = getDataStoreName(node)
-	m.Priority = getMatcherPriority(node)
-
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	return err
+	return m.ParseProps(node)
 }
 
 func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
-
 	var status bool
 	var err error
 
@@ -99,16 +86,4 @@ func (m *IntegerMatcher) Match(responseValue interface{}, datastore *DataStore) 
 	}
 
 	return status, store, err
-}
-
-func (m *IntegerMatcher) Error() string {
-	return m.ErrorStr
-}
-
-func (m *IntegerMatcher) GetPriority() int {
-	return m.Priority
-}
-
-func (m *IntegerMatcher) SetError(error string) {
-	m.ErrorStr = error
 }

@@ -10,19 +10,13 @@ type ArrayMatcher struct {
 	Length    *int64
 	LengthStr *string
 	Items     []interface{}
-	ErrorStr  string
-	Exists    bool
-	DSName    string
 	Sorted    bool
-	Priority  int
+	FieldMatcherProps
 }
 
 func (m *ArrayMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	if err != nil {
-		return err
-	}
+	err := m.ParseProps(node)
+	m.Nullable = true
 
 	if v, ok := node[TEST_KEY_LENGTH]; ok {
 		switch val := v.(type) {
@@ -51,18 +45,11 @@ func (m *ArrayMatcher) Parse(parentNode interface{}, node map[interface{}]interf
 		m.Sorted = true
 	}
 
-	m.Priority = getMatcherPriority(node)
-	m.DSName = getDataStoreName(node)
-	return nil
+	return err
 }
 
 func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, true); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
-
 	var typedResponseValue []interface{}
 	if responseValue == nil {
 		// if nil, we can still validate the length in case a non-0 value was expected
@@ -112,15 +99,4 @@ func (m *ArrayMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
-}
-
-func (m *ArrayMatcher) Error() string {
-	return m.ErrorStr
-}
-func (m *ArrayMatcher) GetPriority() int {
-	return m.Priority
-}
-
-func (m *ArrayMatcher) SetError(error string) {
-	m.ErrorStr = error
 }

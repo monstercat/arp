@@ -62,10 +62,58 @@ const (
 	DEFAULT_PRIORITY = 9999
 )
 
+type FieldMatcherProps struct {
+	Exists   bool
+	Nullable bool
+	ErrorStr string
+	DSName   string
+	Priority int
+}
+
+func (m *FieldMatcherProps) ParseProps(node map[interface{}]interface{}) error {
+	m.DSName = getDataStoreName(node)
+	m.Priority = getMatcherPriority(node)
+
+	var err error
+	m.Exists, err = getExistsFlag(node)
+	return err
+}
+
+func (m *FieldMatcherProps) Error() string {
+	return m.ErrorStr
+}
+
+func (m *FieldMatcherProps) GetPriority() int {
+	return m.Priority
+}
+
+func (m *FieldMatcherProps) SetError(error string) {
+	m.ErrorStr = error
+}
+
+func (m *FieldMatcherProps) ValidateExistance(node interface{}) (bool, bool) {
+	exists := m.Exists
+	canBeNull := m.Nullable
+
+	if node == nil && exists && !canBeNull {
+		m.ErrorStr = ReceivedNullErrFmt
+		return false, false
+	} else if node == nil && !exists {
+		m.ErrorStr = fmt.Sprintf(ExpectedNullSuccessFmt, node)
+		return true, false
+	} else if node != nil && !exists {
+		m.ErrorStr = ExpectedNullErrFmt
+		return false, false
+	}
+	// status, passthrough, message
+	return false, true
+}
+
 type FieldMatcher interface {
 	GetPriority() int
 	Parse(parentNode interface{}, node map[interface{}]interface{}) error
 	Match(field interface{}, datastore *DataStore) (bool, DataStore, error)
+	ValidateExistance(node interface{}) (bool, bool)
 	Error() string
 	SetError(error string)
 }
@@ -402,40 +450,40 @@ func (r *ResponseMatcher) loadField(parentNode interface{}, fieldNode map[interf
 func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode interface{}, paths FieldMatcherPath) error {
 	typeCheck := fieldNode
 	var foundMatcher FieldMatcher
+	defaultProps := FieldMatcherProps{
+		Exists:   true,
+		Priority: DEFAULT_PRIORITY,
+	}
 	switch v := typeCheck.(type) {
 	case string:
 		foundMatcher = &StringMatcher{
-			Value:    &v,
-			Exists:   true,
-			Priority: DEFAULT_PRIORITY,
+			Value:             &v,
+			FieldMatcherProps: defaultProps,
 		}
 	case float64:
 		foundMatcher = &FloatMatcher{
-			Value:    &v,
-			Exists:   true,
-			Priority: DEFAULT_PRIORITY,
+			Value:             &v,
+			FieldMatcherProps: defaultProps,
 		}
 	case int:
 		foundInt := int64(v)
 		foundMatcher = &IntegerMatcher{
-			Value:    &foundInt,
-			Exists:   true,
-			Priority: DEFAULT_PRIORITY,
+			Value:             &foundInt,
+			FieldMatcherProps: defaultProps,
 		}
 	case bool:
 		foundMatcher = &BoolMatcher{
-			Value:    &v,
-			Exists:   true,
-			Priority: DEFAULT_PRIORITY,
+			Value:             &v,
+			FieldMatcherProps: defaultProps,
 		}
 	case []interface{}:
 		defaultLength := NotEmpty
+		defaultProps.Nullable = true
 		foundMatcher = &ArrayMatcher{
-			LengthStr: &defaultLength,
-			Items:     v,
-			Exists:    true,
-			Sorted:    true,
-			Priority:  DEFAULT_PRIORITY,
+			LengthStr:         &defaultLength,
+			Items:             v,
+			Sorted:            true,
+			FieldMatcherProps: defaultProps,
 		}
 	case map[string]interface{}:
 		newMap := make(map[interface{}]interface{})
@@ -571,7 +619,10 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 }
 
 func (r *ResponseMatcher) depthMatch(node interface{}, matcher *FieldMatcherConfig, path string, key string) DepthMatchResponse {
-	status, _, _ := matcher.Matcher.Match(node, r.DS)
+	var status, passthrough bool
+	if status, passthrough = matcher.Matcher.ValidateExistance(node); passthrough {
+		status, _, _ = matcher.Matcher.Match(node, r.DS)
+	}
 	if status {
 		result := DepthMatchResponse{
 			FoundNode: DepthMatchResponseNode{
@@ -756,13 +807,19 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 		}
 	}
 
-	status, ds, err := matcher.Matcher.Match(node, r.DS)
-	if err != nil {
-		return ResponseMatcherResults{false, results, false, err}
-	}
+	var status, passthrough bool
+	var err error
+	var ds DataStore
 
-	for k := range ds.Store {
-		(*r.DS).Put(k, ds.Store[k])
+	if status, passthrough = matcher.Matcher.ValidateExistance(node); passthrough {
+		status, ds, err = matcher.Matcher.Match(node, r.DS)
+		if err != nil {
+			return ResponseMatcherResults{false, results, false, err}
+		}
+
+		for k := range ds.Store {
+			(*r.DS).Put(k, ds.Store[k])
+		}
 	}
 
 	results = append(results, &FieldMatcherResult{

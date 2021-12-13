@@ -7,11 +7,8 @@ import (
 )
 
 type StringMatcher struct {
-	Value    *string
-	ErrorStr string
-	Exists   bool
-	DSName   string
-	Priority int
+	Value *string
+	FieldMatcherProps
 }
 
 func (m *StringMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
@@ -24,21 +21,11 @@ func (m *StringMatcher) Parse(parentNode interface{}, node map[interface{}]inter
 		}
 	}
 
-	m.DSName = getDataStoreName(node)
-	m.Priority = getMatcherPriority(node)
-
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	return err
+	return m.ParseProps(node)
 }
 
 func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
-
 	typedResponseValue, ok := responseValue.(string)
 	if !ok {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_STR, reflect.TypeOf(responseValue))
@@ -78,14 +65,6 @@ func (m *StringMatcher) Match(responseValue interface{}, datastore *DataStore) (
 		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
-}
-
-func (m *StringMatcher) Error() string {
-	return m.ErrorStr
-}
-
-func (m *StringMatcher) GetPriority() int {
-	return m.Priority
 }
 
 func (m *StringMatcher) SetError(error string) {

@@ -8,12 +8,9 @@ import (
 )
 
 type FloatMatcher struct {
-	Value    *float64
-	Pattern  *string
-	Exists   bool
-	ErrorStr string
-	DSName   string
-	Priority int
+	Value   *float64
+	Pattern *string
+	FieldMatcherProps
 }
 
 func (m *FloatMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
@@ -30,21 +27,12 @@ func (m *FloatMatcher) Parse(parentNode interface{}, node map[interface{}]interf
 			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_KEY_MATCHES, TYPE_NUM), parentNode))
 		}
 	}
-	m.DSName = getDataStoreName(node)
-	m.Priority = getMatcherPriority(node)
-
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	return err
+	return m.ParseProps(node)
 }
 
 func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
 
 	var status bool
 	var err error
@@ -88,16 +76,4 @@ func (m *FloatMatcher) Match(responseValue interface{}, datastore *DataStore) (b
 	}
 
 	return status, store, err
-}
-
-func (m *FloatMatcher) Error() string {
-	return m.ErrorStr
-}
-
-func (m *FloatMatcher) GetPriority() int {
-	return m.Priority
-}
-
-func (m *FloatMatcher) SetError(error string) {
-	m.ErrorStr = error
 }

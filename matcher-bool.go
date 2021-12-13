@@ -8,12 +8,9 @@ import (
 )
 
 type BoolMatcher struct {
-	Value    *bool
-	Pattern  *string
-	ErrorStr string
-	Exists   bool
-	DSName   string
-	Priority int
+	Value   *bool
+	Pattern *string
+	FieldMatcherProps
 }
 
 func (m *BoolMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
@@ -27,22 +24,12 @@ func (m *BoolMatcher) Parse(parentNode interface{}, node map[interface{}]interfa
 			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_KEY_MATCHES, TYPE_BOOL), parentNode))
 		}
 	}
-	m.DSName = getDataStoreName(node)
-	m.Priority = getMatcherPriority(node)
-
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	return err
+	return m.ParseProps(node)
 }
 
 func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
-
 	typedResponseValue, ok := responseValue.(bool)
 	if !ok {
 		m.ErrorStr = fmt.Sprintf(MismatchedMatcher, TYPE_BOOL, reflect.TypeOf(responseValue))
@@ -84,16 +71,4 @@ func (m *BoolMatcher) Match(responseValue interface{}, datastore *DataStore) (bo
 		err = store.PutVariable(m.DSName, responseValue)
 	}
 	return status, store, err
-}
-
-func (m *BoolMatcher) Error() string {
-	return m.ErrorStr
-}
-
-func (m *BoolMatcher) GetPriority() int {
-	return m.Priority
-}
-
-func (m *BoolMatcher) SetError(error string) {
-	m.ErrorStr = error
 }

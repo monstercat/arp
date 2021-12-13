@@ -14,10 +14,7 @@ type ExecutableMatcher struct {
 	Cmd        string
 	BinPath    string
 	PrgmArgs   []string
-	ErrorStr   string
-	Exists     bool
-	DSName     string
-	Priority   int
+	FieldMatcherProps
 }
 
 func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]interface{}) error {
@@ -65,21 +62,12 @@ func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]i
 		}
 	}
 
-	m.DSName = getDataStoreName(node)
-	m.Priority = getMatcherPriority(node)
-
-	var err error
-	m.Exists, err = getExistsFlag(node)
-	return err
+	return m.ParseProps(node)
 }
 
 func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
 	m.ErrorStr = ""
-	if status, passthrough, message := handleExistence(responseValue, m.Exists, false); !passthrough {
-		m.ErrorStr = message
-		return status, store, nil
-	}
 	// expect all inputs to be formatted as a string to pass as an input to the program
 	typedResponseValue := fmt.Sprintf("%v", responseValue)
 
@@ -156,16 +144,4 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 	}
 
 	return status, store, nil
-}
-
-func (m *ExecutableMatcher) Error() string {
-	return m.ErrorStr
-}
-
-func (m *ExecutableMatcher) GetPriority() int {
-	return m.Priority
-}
-
-func (m *ExecutableMatcher) SetError(error string) {
-	m.ErrorStr = error
 }
