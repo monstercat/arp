@@ -21,6 +21,12 @@ type MultiSuiteResult struct {
 	TestFile    string
 }
 
+type MultiSuiteWorker struct {
+	TestTags []string
+	Suite    *TestSuite
+	TestFile string
+}
+
 func NewMultiSuiteTest(testDir string, fixtures string) (*MultiTestSuite, error) {
 	multiSuite := &MultiTestSuite{
 		Suites:  map[string]*TestSuite{},
@@ -54,42 +60,58 @@ func (t *MultiTestSuite) LoadTests(testDir string, fixtures string) error {
 }
 
 func (t *MultiTestSuite) ExecuteTests(threads int, testTags []string) (bool, []MultiSuiteResult, time.Duration, error) {
+	startTime := time.Now()
+
 	if t.Verbose {
 		fmt.Printf("Executing tests across %v threads...\n\n", threads)
 	}
-	startTime := time.Now()
 
 	var results []MultiSuiteResult
 	aggregateStatus := true
 
-	testCount := len(t.Suites)
-	channels := make(chan MultiSuiteResult, threads)
 	wg := sync.WaitGroup{}
+	testCount := len(t.Suites)
+	workerResults := make(chan MultiSuiteResult, threads)
+	workerMessages := make(chan MultiSuiteWorker, testCount)
 
-	for k := range t.Suites {
-		suite := t.Suites[k]
-		wg.Add(1)
-		go func(file string) {
-			defer wg.Done()
+	wg.Add(threads)
+	for i := 0; i < threads; i++ {
+		go func() {
+			for {
+				m, ok := <-workerMessages
+				if !ok {
+					wg.Done()
+					return
+				}
+				if t.Verbose {
+					fmt.Printf("> In Progress: %v\n", m.TestFile)
+				}
+				status, result, err := m.Suite.ExecuteTests(m.TestTags)
+				r := MultiSuiteResult{
+					Passed:      status,
+					Error:       err,
+					TestFile:    m.TestFile,
+					TestResults: result,
+				}
 
-			if t.Verbose {
-				fmt.Printf("> In Progress: %v\n", file)
+				workerResults <- r
 			}
-			status, result, err := suite.ExecuteTests(testTags)
-			r := MultiSuiteResult{
-				Passed:      status,
-				Error:       err,
-				TestFile:    file,
-				TestResults: result,
-			}
-
-			channels <- r
-		}(k)
+		}()
 	}
 
-	//	for d := range channels {
+	for k := range t.Suites {
+		msg := MultiSuiteWorker{
+			TestTags: testTags,
+			Suite:    t.Suites[k],
+			TestFile: k,
+		}
+		workerMessages <- msg
+	}
+	close(workerMessages)
+	defer close(workerResults)
+
 	for i := 0; i < testCount; i++ {
-		d := <-channels
+		d := <-workerResults
 		results = append(results, d)
 		aggregateStatus = aggregateStatus && d.Passed
 
@@ -102,6 +124,7 @@ func (t *MultiTestSuite) ExecuteTests(threads int, testTags []string) (bool, []M
 			fmt.Printf("< Done: [%v] %v\n", statusStr, d.TestFile)
 		}
 	}
+	wg.Wait()
 	duration := time.Since(startTime)
 	return aggregateStatus, results, duration, nil
 }
