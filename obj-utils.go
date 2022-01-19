@@ -245,9 +245,11 @@ func PutJsonValue(dest map[string]interface{}, jsonPath string, value interface{
 				return fmt.Errorf(BadIndexDSFmt, jsonPath)
 			}
 			// if the index is out of range, then we'll resize the array just enough to fix the index
-			if idx > uint64(len(v)) {
+			oldLen := uint64(len(v))
+			if idx >= oldLen {
 				newArray := v[:]
-				delta := (idx - uint64(len(v))) + 1
+				delta := (idx - oldLen) + 1
+
 				for delta > 0 {
 					delta--
 					newArray = append(newArray, nil)
