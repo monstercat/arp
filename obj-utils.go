@@ -82,6 +82,11 @@ func ToJsonObj(obj interface{}) (map[string]interface{}, error) {
 	return r, nil
 }
 
+func ToJsonStr(obj interface{}) string {
+	b, _ := json.Marshal(obj)
+	return string(b)
+}
+
 func Base64GzipToByteReader(input string) (io.ReadCloser, error) {
 
 	gzipB, err := base64.StdEncoding.DecodeString(input)

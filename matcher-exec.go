@@ -68,12 +68,12 @@ func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]i
 func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStore) (bool, DataStore, error) {
 	store := NewDataStore()
 	m.ErrorStr = ""
-	// expect all inputs to be formatted as a string to pass as an input to the program
-	typedResponseValue := fmt.Sprintf("%v", responseValue)
 
 	// immediately store value into datastore so it can be resolved as a variable for program inputs
+	// When we fetch the values from data store, they will be left as an object or converted to string depending
+	// on the context (is it being embedded in a string vs standalone)
 	if m.DSName != "" {
-		if err := (*datastore).PutVariable(m.DSName, typedResponseValue); err != nil {
+		if err := (*datastore).PutVariable(m.DSName, responseValue); err != nil {
 			return false, store, err
 		}
 	}

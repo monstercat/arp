@@ -26,7 +26,13 @@ func varToString(variable interface{}, def ...string) string {
 			return ""
 		}
 	}
-	return fmt.Sprintf("%v", variable)
+
+	switch variable.(type) {
+	case string, int, int64, float32, float64:
+		return fmt.Sprintf("%v", variable)
+	}
+
+	return ToJsonStr(variable)
 }
 
 func NewDataStore() DataStore {
@@ -56,6 +62,7 @@ func (t *DataStore) PutVariable(variable string, value interface{}) error {
 func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 	var result interface{}
 	var outputString string
+	outputToString := false
 	variables := TokenStack{}
 	variables.Parse(input, VAR_PREFIX, VAR_SUFFIX)
 
@@ -65,6 +72,7 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 
 	if variables.Extra != "" {
 		outputString = input
+		outputToString = true
 	}
 
 	type ExtendedStackFrame struct {
@@ -95,7 +103,7 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 		if v.Nested == 0 {
 			// if the input contains more text than just the variable, we can assume that it is intended to be replaced
 			// within the string
-			if outputString != "" {
+			if outputToString {
 				outputString = strings.ReplaceAll(outputString, v.Token, varToString(resolvedVar))
 			} else {
 				// otherwise, just return the node and it'll be converted as needed
@@ -120,8 +128,8 @@ func (t *DataStore) ExpandVariable(input string) (interface{}, error) {
 		}
 
 	}
-	if outputString != "" {
-		result = outputString
+	if outputToString {
+		return outputString, nil
 	}
 
 	return result, nil
