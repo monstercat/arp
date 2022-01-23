@@ -3,7 +3,7 @@ Short for Arpeggio, is a tool for automating and validating RESTful, RPC, and We
 
 Excluding the validation aspect, it can be used to orchestrate a sequence of network calls where the outputs of a call can be mapped to inputs of the subsequent calls.
 
-## Hilights
+## Highlights
 * Tests are defined as YAML configuration files, no coding required
 * Validations are defined based on the expectation that an API call returns JSON formatted data. Each field can be validated using exact or partial matching.
 * Non-JSON formatted responses (e.g. binaries from download URLS, websocket requests) are automatically transformed into a JSON representable object that exposes simple properties for validation (size in bytes, sha256sum). If these properties are not enough, the response can be dumped to a local file and passed to an external program for validation as part of the test definition!
@@ -136,7 +136,23 @@ tests:
                   matches: https://.*
 ```
 
+By default it assumes the response payload will be an object, but this can be overridden using any type matcher.
 
+```yaml
+# API returns a JSON array instead of an object
+tests:
+  - name: 'List categories'
+    description: 'Search for string in unsorted array'
+    method: GET
+    route: 'https://api.publicapis.org/categories'
+    response:
+      code: 200
+      payload:
+        type: array
+        length: $notEmpty
+        items:
+          - "Animals"
+```
 
 
 ### Binary Response
@@ -1784,3 +1800,36 @@ tests:
 ```
 
 The fixture and test files are concatenated together on load making anchors within the fixtures file available for reference in your test cases as well. This can be used to provide common anchors that can be used across all test files without having to redefine them in each test file.
+
+### Easy Non-Existent Check For Unsorted Data
+
+There may be situations in which you wish to validate that something does not exist in a response, and the data does not follow a strict ordering or known path. For example, validating that an object does not exist in an unsorted array response.
+
+As long as you know a unique aspect of what *shouldn't* exist, you can pass objects to an external validator and simply use grep to verify that nothing
+matches.
+
+```yaml
+tests:
+  - name: 'Validate no "Hardware" category'
+    description: '"Hardware" should not exist as a category in the listing.'
+    method: GET
+    route: 'https://api.publicapis.org/categories'
+    response:
+      code: 200
+      payload:
+        type: external
+        # store the entire payload response in a variable
+        storeAs: categories_list
+        # when @{categories_list} is resolved, it will be passed in as a string JSON
+        # that we can then perform an inverse grep on.
+        cmd: $(/bin/bash -c `grep -i -q -v "\"Hardware\"" <<<  '@{categories_list}'`)
+
+```
+
+
+
+
+
+
+
+
