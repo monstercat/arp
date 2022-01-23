@@ -213,7 +213,11 @@ func PrintSingleTestReport(opts ReportOptions, test *TestResult) {
 			a := test.Fields[i].ObjectKeyPath
 			b := test.Fields[j].ObjectKeyPath
 
-			if a[0] == b[0] || (a[0] != '.' && b[0] != '.') {
+			if len(a) == 0 {
+				return true
+			} else if len(b) == 0 {
+				return true
+			} else if a[0] == b[0] || (a[0] != '.' && b[0] != '.') {
 				return a < b
 			} else if a[0] != '.' {
 				return true

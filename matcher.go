@@ -454,6 +454,7 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 		Exists:   true,
 		Priority: DEFAULT_PRIORITY,
 	}
+
 	switch v := typeCheck.(type) {
 	case string:
 		foundMatcher = &StringMatcher{
@@ -501,6 +502,10 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 		foundMatcher = objMatcher
 	}
 
+	lastKey := &paths.Keys[len(paths.Keys)-1]
+	// default to true unless it's an object or array
+	lastKey.RealKey.IsLast = true
+
 	if foundMatcher != nil {
 		r.AddMatcherConfig(&FieldMatcherConfig{
 			Matcher:       foundMatcher,
@@ -510,12 +515,13 @@ func (r *ResponseMatcher) loadSimplifiedField(parentNode interface{}, fieldNode 
 
 	switch val := foundMatcher.(type) {
 	case *ArrayMatcher:
+		lastKey.RealKey.IsLast = false
 		if err := r.loadArrayFields(val, parentNode, val.Items, paths); err != nil {
 			return err
 		}
 	case *ObjectMatcher:
-		last := &paths.Keys[len(paths.Keys)-1]
-		last.RealKey.IsObject = true
+		lastKey.RealKey.IsLast = false
+		lastKey.RealKey.IsObject = true
 		if err := r.loadObjectFields(parentNode, val.Properties, paths); err != nil {
 			return err
 		}
@@ -778,8 +784,15 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 			} else {
 				// skip the current jsonKey if it is representing an actual array index number. Since we're performing
 				// a search, we don't need to match on this at all and should use the next available object field key
-				if jsonKey.IsArrayElement {
+				if jsonKey.IsArrayElement && !jsonKey.IsLast {
 					continue
+				}
+
+				// But if the array element is the last element in our definitions (i.e. the array index points to a primitive type),
+				// then we can't skip it since there are no further keys to match. Disable key matching since there's no key to match with.
+				keyMatching := true
+				if jsonKey.IsArrayElement && jsonKey.IsLast {
+					keyMatching = false
 				}
 				// For unsorted arrays, we end up performing a depth first search until we find a node that passes
 				// the validation.
@@ -787,10 +800,10 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 				// will actually be performed on the node that matched the previous validation. Otherwise, generic
 				// validations may pick out other nodes that are not related to what was expected.
 				result := r.depthMatch(t, matcher, pathStr, jsonKey.Name)
-				if result.FoundNode.Status && result.FoundNode.MatchedNodeKey {
+				if result.FoundNode.Status && (result.FoundNode.MatchedNodeKey || !keyMatching) {
 					node = result.FoundNode.Node
 					pathStr = result.FoundNode.NodePath
-					// add all parent nodes leading up to the result to our cafmt.che so we can
+					// add all parent nodes leading up to the result to our cache so we can
 					// look them up without having to search again.
 					for i, chainNode := range result.NodeChain {
 						cachepath, _ := matcher.ObjectKeyPath.getObjectPath(len(result.NodeChain) - i)

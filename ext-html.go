@@ -27,7 +27,7 @@ func (hj *HtmlResponseJson) GenericJSON() map[string]interface{} {
 }
 
 // Implement ResponseHandler
-func (hp *HtmlExt) Parse(response *http.Response) (map[string]interface{}, interface{}, error) {
+func (hp *HtmlExt) Parse(response *http.Response) (interface{}, interface{}, error) {
 	node, err := html.Parse(response.Body)
 	if err != nil {
 		return nil, nil, InvalidContentType

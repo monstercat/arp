@@ -182,32 +182,45 @@ func executeWebSocket(test *TestCase, result *TestResult, input interface{}, ste
 		}()
 	}
 
+	// executeWebSocket may be called multiple times in a given test case and can
+	// incrementally update a single response object
 	if result.Response == nil {
-		result.Response = make(map[string]interface{})
-		result.Response[WS_RESPONSE] = make([]interface{}, 0)
+		resp := make(map[string]interface{})
+		resp[WS_RESPONSE] = make([]interface{}, 0)
+		result.Response = resp
 	}
 
+	targetParent := result.Response.(map[string]interface{})
+	responseList := targetParent[WS_RESPONSE].([]interface{})
+
 	if step >= 0 && step < len(inputs.Requests) {
-		return len(inputs.Requests) - 1 - step, executeWebsoecktRequest(client, &inputs.Requests[step], result)
+		responses, err := executeWebsoecktRequest(client, &inputs.Requests[step], result)
+		responseList = append(responseList, responses...)
+
+		targetParent[WS_RESPONSE] = responseList
+		return len(inputs.Requests) - 1 - step, err
 	}
 
 	for _, ti := range inputs.Requests {
-		err := executeWebsoecktRequest(client, &ti, result)
+		responses, err := executeWebsoecktRequest(client, &ti, result)
 		if err != nil {
 			return 0, err
 		}
+		responseList = append(responseList, responses...)
+		targetParent[WS_RESPONSE] = responseList
 	}
 
 	return 0, nil
 }
 
-func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, result *TestResult) error {
+func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, result *TestResult) ([]interface{}, error) {
+	responses := make([]interface{}, 0)
 	if !testInput.ReadOnly {
 		err := writeWebsocketPayload(client, testInput)
 		if err != nil {
 			//result.Passed = false
 			//result.RunError = err
-			return err
+			return nil, err
 		}
 	}
 
@@ -216,13 +229,13 @@ func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, resul
 		if testInput.Response == "binary" {
 			_, responseReader, err := client.NextReader()
 			if err != nil {
-				return fmt.Errorf("failed to initialze websocket response reader: %v", err)
+				return nil, fmt.Errorf("failed to initialze websocket response reader: %v", err)
 			}
 			subRespJson, _ = getBinaryJson(testInput.FilePath, true, responseReader)
 		} else {
 			_, responseData, err := client.ReadMessage()
 			if err != nil {
-				return fmt.Errorf("failed to read websocket response: %v", err)
+				return nil, fmt.Errorf("failed to read websocket response: %v", err)
 			}
 
 			if testInput.Response == "json" || testInput.Response == "" {
@@ -235,9 +248,14 @@ func executeWebsoecktRequest(client *websocket.Conn, testInput *WSMessage, resul
 			}
 		}
 
-		result.Response[WS_RESPONSE] = append(result.Response[WS_RESPONSE].([]interface{}), subRespJson)
+		//resp := result.Response.(*map[string]interface{})
+		//target := (*resp)[WS_RESPONSE]
+		//v := &target
+
+		//*v = append(*v, subRespJson)
+		responses = append(responses, subRespJson)
 	}
-	return nil
+	return responses, nil
 }
 
 func writeWebsocketPayload(client *websocket.Conn, input *WSMessage) error {

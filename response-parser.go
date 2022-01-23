@@ -11,7 +11,7 @@ var (
 )
 
 type ResponseParser interface {
-	Parse(response *http.Response) (map[string]interface{}, interface{}, error)
+	Parse(response *http.Response) (interface{}, interface{}, error)
 }
 
 type ResponseParserHandler map[string]ResponseParser
@@ -27,7 +27,7 @@ func (rh *ResponseParserHandler) LoadDefaults() {
 	rh.Register("binary", &BinaryParser{})
 }
 
-func (rh *ResponseParserHandler) Handle(test *TestCase, response *http.Response) (map[string]interface{}, interface{}, error) {
+func (rh *ResponseParserHandler) Handle(test *TestCase, response *http.Response) (interface{}, interface{}, error) {
 	responseType := test.Config.Response.Type
 
 	parser, exists := (*rh)[responseType]

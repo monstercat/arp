@@ -28,7 +28,7 @@ type BinResponseJson struct {
 }
 
 // Implement ResponseHandler
-func (bp *BinaryParser) Parse(response *http.Response) (map[string]interface{}, interface{}, error) {
+func (bp *BinaryParser) Parse(response *http.Response) (interface{}, interface{}, error) {
 	rj, err := getBinaryJson(bp.SavePath, !bp.Fallback, response.Body)
 	if err != nil {
 		return nil, nil, err

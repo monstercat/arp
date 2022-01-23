@@ -12,11 +12,12 @@ import (
 type JSONParser struct{}
 
 // Implement ResponseHandler
-func (jp *JSONParser) Parse(response *http.Response) (map[string]interface{}, interface{}, error) {
+func (jp *JSONParser) Parse(response *http.Response) (interface{}, interface{}, error) {
 	headers := response.Header
 	body := response.Body
 	// expecting JSON response, we can assume (hopefully) that the JSON data will fit in memory
 	var responseJson map[string]interface{}
+	var responseArrayJson []interface{}
 	var responseData []byte
 	for _, t := range headers.Values(HEADER_CONTENT_TYPE) {
 		if strings.Contains(t, MIME_JSON) || strings.Contains(t, MIME_TEXT) {
@@ -30,7 +31,13 @@ func (jp *JSONParser) Parse(response *http.Response) (map[string]interface{}, in
 	}
 	if len(responseData) > 0 {
 		if err := json.Unmarshal(responseData, &responseJson); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal JSON response: %v", err)
+			if err2 := json.Unmarshal(responseData, &responseArrayJson); err2 != nil {
+				return nil, nil, fmt.Errorf("failed to unmarshal JSON response: %v, %v", err, err2)
+			}
+			return responseArrayJson, nil, nil
+			//responseJson = make(map[string]interface{})
+			//responseJson["array"] = responseArrayJson
+			//return nil, nil, fmt.Errorf("failed to unmarshal JSON response: %v", err)
 		}
 	} else {
 		// a content type header was provided and no json response was provided, fallback to binary

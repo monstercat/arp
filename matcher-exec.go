@@ -31,7 +31,6 @@ func (m *ExecutableMatcher) Parse(parentNode interface{}, node map[interface{}]i
 	if cmdStr, ok := node[TEST_EXEC_KEY_CMD]; ok {
 		if s, sOk := cmdStr.(string); sOk {
 			m.Cmd = s
-			fmt.Printf("Got command: %v\n", m.Cmd)
 		} else {
 			return errors.New(ObjectPrintf(fmt.Sprintf(MalformedDefinitionFmt, TEST_EXEC_KEY_CMD, TYPE_STR), parentNode))
 		}
@@ -108,7 +107,7 @@ func (m *ExecutableMatcher) Match(responseValue interface{}, datastore *DataStor
 			}
 		}
 
-		status := true
+		status = true
 		cmd := exec.Command(resolvedBinPath.(string), argStrings...)
 
 		result, err := cmd.CombinedOutput()
