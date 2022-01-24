@@ -76,7 +76,23 @@ func (jp *JSONParser) Validate(test *TestCase, result *TestResult) (bool, []*Fie
 	if err != nil {
 		return false, results, err
 	}
-	newResults = append(newResults, results...)
+
+	for _, r := range results {
+		// if r.ObjectKeyPathSrc.IsRootObj() {
+		// 	r.ObjectKeyPathSrc.Keys = append([]FieldMatcherKey{
+		// 		{
+		// 			Name: "$",
+		// 			RealKey: JsonKey{
+		// 				Name: "$",
+		// 			},
+		// 		},
+		// 	}, r.ObjectKeyPathSrc.Keys...)
+
+		// 	r.ObjectKeyPath = r.ObjectKeyPathSrc.GetDisplayPath()
+		// }
+
+		newResults = append(newResults, r)
+	}
 
 	// Validate response headers
 	headerStatus, headerResults, headerErr := test.ResponseHeaderMatcher.Match(headers)

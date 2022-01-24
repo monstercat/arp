@@ -178,15 +178,27 @@ func (t *TestCase) LoadConfig(test *TestCaseCfg) error {
 
 	payload := t.Config.Response.Payload
 	if payload != nil {
+		rootPath := FieldMatcherPath{
+			Keys: []FieldMatcherKey{
+				{
+					Ignore: true,
+					Name:   "",
+					RealKey: JsonKey{
+						Name: "",
+					},
+				},
+			},
+		}
+
 		if payloadObj, ok := payload.(map[interface{}]interface{}); ok {
-			if err := t.ResponseMatcher.loadField(payload, payloadObj, FieldMatcherPath{}); err != nil {
-				if err := t.ResponseMatcher.loadObjectFields(payload, payloadObj, FieldMatcherPath{}); err != nil {
+			if err := t.ResponseMatcher.loadField(payload, payloadObj, rootPath); err != nil {
+				if err := t.ResponseMatcher.loadObjectFields(payload, payloadObj, rootPath); err != nil {
 					return err
 				}
 				//return err
 			}
 		} else {
-			if err := t.ResponseMatcher.loadSimplifiedField(payload, payload, FieldMatcherPath{}); err != nil {
+			if err := t.ResponseMatcher.loadSimplifiedField(payload, payload, rootPath); err != nil {
 				return err
 			}
 		}

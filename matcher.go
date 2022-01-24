@@ -18,7 +18,9 @@ const (
 	GTE      = "$>="
 	EQ       = "$="
 
-	FIELD_KEY_PREFIX = "$."
+	FIELD_KEY_SYMBOL       = "$"
+	FIELD_KEY_PREFIX       = FIELD_KEY_SYMBOL + "."
+	FIELD_KEY_ARRAY_PREFIX = FIELD_KEY_SYMBOL + "["
 
 	// special keywords used in validation object definitions
 	TEST_KEY_TYPE       = "type"
@@ -121,6 +123,7 @@ type FieldMatcher interface {
 type FieldMatcherKey struct {
 	Name    string
 	RealKey JsonKey
+	Ignore  bool
 }
 
 func (f *FieldMatcherKey) GetDisplayName() string {
@@ -135,6 +138,10 @@ type FieldMatcherPath struct {
 	Keys         []FieldMatcherKey
 	Sorted       bool
 	IsExecutable bool
+}
+
+func (f *FieldMatcherPath) IsRootObj() bool {
+	return len(f.Keys) == 0 || f.Keys[0].Name == "" || f.Keys[0].RealKey.Name == ""
 }
 
 func (f *FieldMatcherPath) getObjectPath(length int) (string, []FieldMatcherKey) {
@@ -175,11 +182,12 @@ type FieldMatcherConfig struct {
 }
 
 type FieldMatcherResult struct {
-	Status          bool
-	ObjectKeyPath   string
-	Error           string
-	ShowExtendedMsg bool
-	IgnoreResult    bool
+	Status           bool
+	ObjectKeyPath    string
+	ObjectKeyPathSrc FieldMatcherPath
+	Error            string
+	ShowExtendedMsg  bool
+	IgnoreResult     bool
 }
 
 type ResponseMatcher struct {
@@ -577,11 +585,19 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 		keyDisplayName := k.(string)
 		realKey := keyDisplayName
 
-		if strings.HasPrefix(keyDisplayName, FIELD_KEY_PREFIX) {
+		// If we come across a key starting with '$.' or '$[' then we need to construct the JSON path mappings internally
+		if strings.HasPrefix(keyDisplayName, FIELD_KEY_PREFIX) || strings.HasPrefix(keyDisplayName, FIELD_KEY_ARRAY_PREFIX) {
 			sanitized := strings.TrimPrefix(keyDisplayName, FIELD_KEY_PREFIX)
+			// if dealing with an array then we only need to get rid of the '$' and leave '['
+			sanitized = strings.TrimPrefix(sanitized, FIELD_KEY_SYMBOL)
+
 			keys := SplitJsonPath(sanitized)
-			realKey = keys[0].Name
+			realKey = "."
+			if len(keys) > 0 {
+				realKey = keys[0].Name
+			}
 			keyDisplayName = realKey
+
 			if strings.ContainsAny(keyDisplayName, JSON_RESERVED_CHARS) {
 				keyDisplayName = "`" + keyDisplayName + "`"
 			}
@@ -593,14 +609,18 @@ func (r *ResponseMatcher) loadObjectFields(parentNode interface{}, fields map[in
 			target = tempStore[realKey]
 		} else {
 			target = fields[k]
-
 		}
-		pathStack = append(pathStack, FieldMatcherKey{
-			Name: keyDisplayName,
-			RealKey: JsonKey{
-				Name: realKey,
-			},
-		})
+
+		// Otherweise, if we come across a key that is only '$', then it's really just a pointer to itself and
+		// no internal mappings need to be updated. We can just pretend this key never existed
+		if keyDisplayName != FIELD_KEY_SYMBOL {
+			pathStack = append(pathStack, FieldMatcherKey{
+				Name: keyDisplayName,
+				RealKey: JsonKey{
+					Name: realKey,
+				},
+			})
+		}
 
 		newPaths := FieldMatcherPath{
 			Keys:   pathStack,
@@ -748,6 +768,9 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 	}
 
 	for _, p := range keys {
+		if p.Ignore {
+			continue
+		}
 
 		jsonKey := p.RealKey
 
@@ -836,10 +859,11 @@ func (r *ResponseMatcher) MatchConfig(matcher *FieldMatcherConfig, response inte
 	}
 
 	results = append(results, &FieldMatcherResult{
-		ObjectKeyPath:   matcher.ObjectKeyPath.GetDisplayPath(),
-		Status:          status,
-		Error:           matcher.Matcher.Error(),
-		ShowExtendedMsg: matcher.ObjectKeyPath.IsExecutable || len(matcher.Matcher.Error()) >= 64,
+		ObjectKeyPath:    matcher.ObjectKeyPath.GetDisplayPath(),
+		ObjectKeyPathSrc: matcher.ObjectKeyPath,
+		Status:           status,
+		Error:            matcher.Matcher.Error(),
+		ShowExtendedMsg:  matcher.ObjectKeyPath.IsExecutable || len(matcher.Matcher.Error()) >= 64,
 
 		// if we have an object matcher, ignore any successful results since those are basically implied
 		// by the presence of having matchers defined on its properties.

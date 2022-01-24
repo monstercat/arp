@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	JSON_OBJECT_ROOT_SYM   = "$$"
 	JSON_OBJECT_DELIM      = "."
 	JSON_INDEX_START_DELIM = "["
 	JSON_INDEX_END_DELIM   = "]"
@@ -157,6 +158,9 @@ func SplitJsonPath(jsonPath string) []JsonKey {
 
 	// Extract array indexing from the keys as their own key for iterating the datastore.
 	var expandedKeys []JsonKey
+	if len(keys) == 0 {
+		return expandedKeys
+	}
 	for index, k := range keys {
 		// now that we've split out the tokens, we can remove any quotes surrounding keys
 		keyStrs := PromoteTokenQuotes(SplitStringTokens(k, JSON_INDEX_DELIM))
@@ -208,6 +212,12 @@ func PutJsonValue(dest map[string]interface{}, jsonPath string, value interface{
 	node := Noodle{
 		Node:   dest,
 		Parent: dest,
+	}
+
+	// if the first key is an array element, then we need to make a root entry for the array
+	if expandedKeys[0].IsArrayElement {
+		dest[JSON_OBJECT_ROOT_SYM] = make([]*interface{}, 0)
+		node.Node = dest[JSON_OBJECT_ROOT_SYM]
 	}
 
 	for _, k := range expandedKeys {
@@ -296,9 +306,15 @@ func PutJsonValue(dest map[string]interface{}, jsonPath string, value interface{
 }
 
 func GetJsonValue(src map[string]interface{}, jsonPath string) (interface{}, error) {
-	expandedKeys := SplitJsonPath(jsonPath)
 	var node interface{}
 	node = src
+
+	expandedKeys := SplitJsonPath(jsonPath)
+	// if the first key is an array element, then automatically look for the root object
+	if expandedKeys[0].IsArrayElement {
+		node = src[JSON_OBJECT_ROOT_SYM]
+	}
+
 	for _, k := range expandedKeys {
 		key := k.Name
 		switch v := node.(type) {

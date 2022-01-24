@@ -213,9 +213,7 @@ func PrintSingleTestReport(opts ReportOptions, test *TestResult) {
 			a := test.Fields[i].ObjectKeyPath
 			b := test.Fields[j].ObjectKeyPath
 
-			if len(a) == 0 {
-				return true
-			} else if len(b) == 0 {
+			if test.Fields[i].ObjectKeyPathSrc.IsRootObj() || test.Fields[j].ObjectKeyPathSrc.IsRootObj() {
 				return true
 			} else if a[0] == b[0] || (a[0] != '.' && b[0] != '.') {
 				return a < b
@@ -232,7 +230,6 @@ func PrintSingleTestReport(opts ReportOptions, test *TestResult) {
 			}
 
 			fieldStr := f.ObjectKeyPath
-
 			suffix := "..."
 			maxLength := MaxResultMsgLength
 			if len(f.Error) < maxLength {
